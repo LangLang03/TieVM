@@ -2,6 +2,7 @@
 .xmake/
 build/
 artifacts/
+compile_commands.json
 coverage/
 *.tbc
 *.tlb
@@ -21,3 +22,4 @@ coverage/
 *.swo
 Thumbs.db
 .DS_Store
+.trae/
