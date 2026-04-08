@@ -11,6 +11,7 @@ int Usage() {
     std::cerr << "  tiebc check <file.tbc>\n";
     std::cerr << "  tiebc disasm <file.tbc>\n";
     std::cerr << "  tiebc build-stdlib <output.tlb>\n";
+    std::cerr << "  tiebc emit-hello <output.tbc>\n";
     return 1;
 }
 
@@ -54,6 +55,35 @@ int Disasm(const std::filesystem::path& path) {
     return 0;
 }
 
+int EmitHello(const std::filesystem::path& path) {
+    tie::vm::Module module("demo.hello");
+    module.version() = tie::vm::SemanticVersion{0, 1, 0};
+    const auto print_symbol = module.AddConstant(tie::vm::Constant::Utf8("tie.std.io.print"));
+    const auto hello = module.AddConstant(tie::vm::Constant::Utf8("Hello, World!"));
+    const auto chinese = module.AddConstant(
+        tie::vm::Constant::Utf8(
+            "\xE4\xBD\xA0\xE5\xA5\xBD\xEF\xBC\x8C"
+            "\xE4\xB8\x96\xE7\x95\x8C\xEF\xBC\x81"));
+
+    auto& fn = module.AddFunction("entry", 6, 0);
+    auto& bb = fn.AddBlock("entry");
+    tie::vm::InstructionBuilder(bb)
+        .LoadK(1, hello)
+        .FfiCall(0, print_symbol, 1)
+        .LoadK(1, chinese)
+        .FfiCall(0, print_symbol, 1)
+        .Ret(0);
+    module.set_entry_function(0);
+
+    auto status = tie::vm::Serializer::SerializeToFile(module, path, true);
+    if (!status.ok()) {
+        std::cerr << "emit hello failed: " << status.message() << "\n";
+        return 2;
+    }
+    std::cout << "wrote " << path.string() << "\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -77,6 +107,8 @@ int main(int argc, char** argv) {
         std::cout << "wrote " << path.string() << "\n";
         return 0;
     }
+    if (cmd == "emit-hello") {
+        return EmitHello(path);
+    }
     return Usage();
 }
-
