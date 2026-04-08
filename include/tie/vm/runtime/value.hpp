@@ -16,6 +16,7 @@ class Value {
         kBool = 3,
         kObject = 4,
         kPointer = 5,
+        kString = 6,
     };
 
     Value() = default;
@@ -26,6 +27,7 @@ class Value {
     static Value Bool(bool v);
     static Value Object(ObjectId object_id);
     static Value Pointer(uint64_t ptr_bits);
+    static Value String(uint64_t string_handle);
 
     [[nodiscard]] Type type() const { return type_; }
     [[nodiscard]] bool IsTruthy() const;
@@ -34,6 +36,7 @@ class Value {
     [[nodiscard]] bool AsBool() const;
     [[nodiscard]] ObjectId AsObject() const;
     [[nodiscard]] uint64_t AsPointer() const;
+    [[nodiscard]] uint64_t AsStringHandle() const;
     [[nodiscard]] std::string ToString() const;
 
     friend bool operator==(const Value& lhs, const Value& rhs);
@@ -45,4 +48,3 @@ class Value {
 };
 
 }  // namespace tie::vm
-

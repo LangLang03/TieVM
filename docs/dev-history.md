@@ -17,3 +17,10 @@
 - 完成 AOT 占位管线接口及元数据导出。
 - 完成单元测试与冒烟测试集。
 
+## 2026-04-09 标准库能力扩展
+
+- 标准库从 marker 占位升级为真实实现，新增 `StdlibRegistry` 自动注册流程。
+- `tie.std.string` 提供 `concat/length/utf8_validate/codepoints/slice`。
+- `tie.std.collections` 提供 `array_new/push/get/size` 与 `map_new/set/get/has`。
+- `tie.std.io` 提供 `print/read_text/write_text`，并支持测试输出捕获。
+- 新增“编译并运行 HelloWorld + 中文输出字节码”冒烟测试。

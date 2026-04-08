@@ -187,4 +187,41 @@ TEST(Smoke, AotPlaceholderPipeline) {
     EXPECT_TRUE(std::filesystem::exists(out_dir / "smoke.aot.aotmeta"));
 }
 
+TEST(Smoke, CompileAndRunHelloWorldAndChineseBytecode) {
+    Module module("smoke.hello");
+    const auto print_symbol = module.AddConstant(Constant::Utf8("tie.std.io.print"));
+    const auto hello = module.AddConstant(Constant::Utf8("Hello, World!"));
+    const auto chinese =
+        module.AddConstant(Constant::Utf8(
+            "\xE4\xBD\xA0\xE5\xA5\xBD\xE4\xB8\x96\xE7\x95\x8C"));
+    auto& fn = module.AddFunction("entry", 6, 0);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb)
+        .LoadK(1, hello)
+        .FfiCall(0, print_symbol, 1)
+        .LoadK(1, chinese)
+        .FfiCall(0, print_symbol, 1)
+        .Ret(0);
+    module.set_entry_function(0);
+
+    const auto path = test::TempPath("hello_world.tbc");
+    ASSERT_TRUE(Serializer::SerializeToFile(module, path).ok());
+    auto parsed_or = Serializer::DeserializeFromFile(path);
+    ASSERT_TRUE(parsed_or.ok()) << parsed_or.status().message();
+
+    VmInstance vm;
+    std::string output;
+    vm.SetOutputSink([&](const std::string& line) {
+        output += line;
+        output.push_back('\n');
+    });
+
+    auto result_or = vm.ExecuteModule(parsed_or.value());
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_NE(output.find("Hello, World!"), std::string::npos);
+    EXPECT_NE(
+        output.find("\xE4\xBD\xA0\xE5\xA5\xBD\xE4\xB8\x96\xE7\x95\x8C"),
+        std::string::npos);
+}
+
 }  // namespace tie::vm

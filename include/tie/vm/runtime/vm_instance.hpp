@@ -1,6 +1,10 @@
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "tie/vm/bytecode/module.hpp"
@@ -20,6 +24,8 @@ class VmThread;
 
 class VmInstance {
   public:
+    using OutputSink = std::function<void(const std::string&)>;
+
     VmInstance();
 
     [[nodiscard]] StatusOr<Value> ExecuteModule(
@@ -28,6 +34,22 @@ class VmInstance {
         const std::string& module_name, const std::vector<Value>& args = {});
 
     [[nodiscard]] VmThread CreateThread();
+
+    [[nodiscard]] StatusOr<Value> InternString(const std::string& value);
+    [[nodiscard]] StatusOr<std::string> ResolveString(const Value& value) const;
+
+    [[nodiscard]] StatusOr<Value> CreateArray();
+    [[nodiscard]] StatusOr<int64_t> ArrayPush(Value array_handle, Value element);
+    [[nodiscard]] StatusOr<Value> ArrayGet(Value array_handle, int64_t index) const;
+    [[nodiscard]] StatusOr<int64_t> ArraySize(Value array_handle) const;
+
+    [[nodiscard]] StatusOr<Value> CreateMap();
+    Status MapSet(Value map_handle, const std::string& key, Value element);
+    [[nodiscard]] StatusOr<Value> MapGet(Value map_handle, const std::string& key) const;
+    [[nodiscard]] StatusOr<bool> MapHas(Value map_handle, const std::string& key) const;
+
+    void SetOutputSink(OutputSink sink);
+    void EmitOutputLine(const std::string& text) const;
 
     [[nodiscard]] FfiBridge& ffi() { return ffi_; }
     [[nodiscard]] const FfiBridge& ffi() const { return ffi_; }
@@ -42,6 +64,16 @@ class VmInstance {
     [[nodiscard]] const ExceptionBridge& exception_bridge() const { return exception_bridge_; }
 
   private:
+    mutable std::mutex runtime_mu_;
+    uint64_t next_string_id_ = 1;
+    uint64_t next_array_id_ = 1;
+    uint64_t next_map_id_ = 1;
+    std::unordered_map<uint64_t, std::string> strings_;
+    std::unordered_map<std::string, uint64_t> string_ids_;
+    std::unordered_map<uint64_t, std::vector<Value>> arrays_;
+    std::unordered_map<uint64_t, std::unordered_map<std::string, Value>> maps_;
+    OutputSink output_sink_;
+
     ObjectModel object_model_;
     ReflectionRegistry reflection_;
     GcController gc_;
@@ -51,4 +83,3 @@ class VmInstance {
 };
 
 }  // namespace tie::vm
-

@@ -17,6 +17,8 @@ class VmThread {
 
     [[nodiscard]] StatusOr<Value> Execute(
         const Module& module, uint32_t entry_function, const std::vector<Value>& args = {});
+    [[nodiscard]] VmInstance& owner() { return *owner_; }
+    [[nodiscard]] const VmInstance& owner() const { return *owner_; }
 
   private:
     [[nodiscard]] StatusOr<Value> ExecuteFunction(
@@ -26,4 +28,3 @@ class VmThread {
 };
 
 }  // namespace tie::vm
-

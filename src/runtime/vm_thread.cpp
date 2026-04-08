@@ -7,24 +7,6 @@
 
 namespace tie::vm {
 
-namespace {
-
-StatusOr<Value> ConstantToValue(const Constant& c) {
-    switch (c.type) {
-        case ConstantType::kInt64:
-            return Value::Int64(c.int64_value);
-        case ConstantType::kFloat64:
-            return Value::Float64(c.float64_value);
-        case ConstantType::kUtf8:
-            // Registers are 64-bit cells in v0.x. String constants are passed by
-            // constant pool index through dedicated opcodes.
-            return Status::Unsupported("utf8 constant cannot be materialized as scalar value");
-    }
-    return Status::Unsupported("unknown constant type");
-}
-
-}  // namespace
-
 StatusOr<Value> VmThread::Execute(
     const Module& module, uint32_t entry_function, const std::vector<Value>& args) {
     if (entry_function >= module.functions().size()) {
@@ -77,11 +59,23 @@ StatusOr<Value> VmThread::ExecuteFunction(
                 if (inst.b >= module.constants().size()) {
                     throw VmException("constant index out of bounds");
                 }
-                auto value_or = ConstantToValue(module.constants()[inst.b]);
-                if (!value_or.ok()) {
-                    throw VmException(value_or.status().message());
+                const auto& constant = module.constants()[inst.b];
+                switch (constant.type) {
+                    case ConstantType::kInt64:
+                        reg(inst.a) = Value::Int64(constant.int64_value);
+                        break;
+                    case ConstantType::kFloat64:
+                        reg(inst.a) = Value::Float64(constant.float64_value);
+                        break;
+                    case ConstantType::kUtf8: {
+                        auto utf8_or = owner_->InternString(constant.utf8_value);
+                        if (!utf8_or.ok()) {
+                            throw VmException(utf8_or.status().message());
+                        }
+                        reg(inst.a) = utf8_or.value();
+                        break;
+                    }
                 }
-                reg(inst.a) = value_or.value();
                 ++pc;
                 break;
             }
@@ -210,4 +204,3 @@ StatusOr<Value> VmThread::ExecuteFunction(
 }
 
 }  // namespace tie::vm
-

@@ -42,6 +42,13 @@ Value Value::Pointer(uint64_t ptr_bits) {
     return value;
 }
 
+Value Value::String(uint64_t string_handle) {
+    Value value;
+    value.type_ = Type::kString;
+    value.bits_ = string_handle;
+    return value;
+}
+
 bool Value::IsTruthy() const {
     switch (type_) {
         case Type::kNull:
@@ -94,6 +101,13 @@ uint64_t Value::AsPointer() const {
     return bits_;
 }
 
+uint64_t Value::AsStringHandle() const {
+    if (type_ != Type::kString) {
+        throw std::runtime_error("value is not string");
+    }
+    return bits_;
+}
+
 std::string Value::ToString() const {
     switch (type_) {
         case Type::kNull:
@@ -108,6 +122,8 @@ std::string Value::ToString() const {
             return "object#" + std::to_string(bits_);
         case Type::kPointer:
             return "ptr#" + std::to_string(bits_);
+        case Type::kString:
+            return "str#" + std::to_string(bits_);
     }
     return "unknown";
 }
@@ -117,4 +133,3 @@ bool operator==(const Value& lhs, const Value& rhs) {
 }
 
 }  // namespace tie::vm
-
