@@ -43,7 +43,7 @@ target("tievm")
 target("tiebc")
     set_kind("binary")
     add_includedirs("include")
-    add_files("src/cli/tiebc_main.cpp")
+    add_files("src/cli/tiebc_main.cpp", "src/cli/tiebc_commands.cpp")
     add_deps("tievm_core")
 
 target("tievm_tests")
