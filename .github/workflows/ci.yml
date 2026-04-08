@@ -1,0 +1,51 @@
+name: tievm-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+jobs:
+  clang-primary:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: xmake-io/github-action-setup-xmake@v1
+      - name: Configure
+        run: xmake f -m release --toolchain=clang
+      - name: Build
+        run: xmake -vD
+      - name: Unit + Smoke
+        run: xmake run tievm_tests
+      - name: Smoke Only
+        run: xmake run tievm_tests --gtest_filter=Smoke.*
+
+  gcc-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: xmake-io/github-action-setup-xmake@v1
+      - name: Configure GCC
+        run: xmake f -m release --toolchain=gcc
+      - name: Build GCC
+        run: xmake -vD
+      - name: Test GCC
+        run: xmake run tievm_tests
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: xmake-io/github-action-setup-xmake@v1
+      - name: Configure for compile database
+        run: xmake f -m debug --toolchain=clang
+      - name: Generate compile_commands
+        run: xmake project -k compile_commands
+      - name: clang-tidy
+        run: |
+          clang-tidy src/**/*.cpp tests/**/*.cpp -- -std=c++20 -Iinclude
+

@@ -1,0 +1,23 @@
+#pragma once
+
+#include "tie/vm/aot/aot_pipeline.hpp"
+#include "tie/vm/bytecode/builder.hpp"
+#include "tie/vm/bytecode/module.hpp"
+#include "tie/vm/bytecode/serializer.hpp"
+#include "tie/vm/bytecode/verifier.hpp"
+#include "tie/vm/common/status.hpp"
+#include "tie/vm/common/version.hpp"
+#include "tie/vm/ffi/ffi_bridge.hpp"
+#include "tie/vm/gc/gc_controller.hpp"
+#include "tie/vm/runtime/exception_bridge.hpp"
+#include "tie/vm/runtime/hot_reload_session.hpp"
+#include "tie/vm/runtime/module_loader.hpp"
+#include "tie/vm/runtime/object_model.hpp"
+#include "tie/vm/runtime/reflection_registry.hpp"
+#include "tie/vm/runtime/value.hpp"
+#include "tie/vm/runtime/vm_instance.hpp"
+#include "tie/vm/runtime/vm_thread.hpp"
+#include "tie/vm/stdlib/stdlib_builder.hpp"
+#include "tie/vm/tlb/tlb_container.hpp"
+#include "tie/vm/utf8/utf8.hpp"
+

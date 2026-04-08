@@ -1,0 +1,353 @@
+#include "tie/vm/bytecode/serializer.hpp"
+
+#include <cstring>
+#include <fstream>
+
+#include "tie/vm/bytecode/verifier.hpp"
+
+namespace tie::vm {
+
+namespace {
+
+constexpr uint8_t kMagic[4] = {'T', 'B', 'C', '0'};
+constexpr uint16_t kFormatMajor = 0;
+constexpr uint16_t kFormatMinor = 1;
+constexpr uint32_t kFlagDebug = 1u << 0;
+
+void WriteU8(std::vector<uint8_t>& out, uint8_t value) { out.push_back(value); }
+
+void WriteU16(std::vector<uint8_t>& out, uint16_t value) {
+    out.push_back(static_cast<uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<uint8_t>((value >> 8) & 0xFFu));
+}
+
+void WriteU32(std::vector<uint8_t>& out, uint32_t value) {
+    for (int i = 0; i < 4; ++i) {
+        out.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFFu));
+    }
+}
+
+void WriteU64(std::vector<uint8_t>& out, uint64_t value) {
+    for (int i = 0; i < 8; ++i) {
+        out.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFFu));
+    }
+}
+
+void WriteString(std::vector<uint8_t>& out, const std::string& value) {
+    WriteU32(out, static_cast<uint32_t>(value.size()));
+    out.insert(out.end(), value.begin(), value.end());
+}
+
+template <typename T>
+StatusOr<T> ReadIntegral(const std::vector<uint8_t>& bytes, size_t* offset);
+
+template <>
+StatusOr<uint8_t> ReadIntegral<uint8_t>(const std::vector<uint8_t>& bytes, size_t* offset) {
+    if (*offset + 1 > bytes.size()) {
+        return Status::SerializationError("unexpected eof while reading u8");
+    }
+    return bytes[(*offset)++];
+}
+
+template <>
+StatusOr<uint16_t> ReadIntegral<uint16_t>(
+    const std::vector<uint8_t>& bytes, size_t* offset) {
+    if (*offset + 2 > bytes.size()) {
+        return Status::SerializationError("unexpected eof while reading u16");
+    }
+    const uint16_t v = static_cast<uint16_t>(bytes[*offset]) |
+                       static_cast<uint16_t>(bytes[*offset + 1] << 8);
+    *offset += 2;
+    return v;
+}
+
+template <>
+StatusOr<uint32_t> ReadIntegral<uint32_t>(
+    const std::vector<uint8_t>& bytes, size_t* offset) {
+    if (*offset + 4 > bytes.size()) {
+        return Status::SerializationError("unexpected eof while reading u32");
+    }
+    uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) {
+        v |= static_cast<uint32_t>(bytes[*offset + i]) << (i * 8);
+    }
+    *offset += 4;
+    return v;
+}
+
+template <>
+StatusOr<uint64_t> ReadIntegral<uint64_t>(
+    const std::vector<uint8_t>& bytes, size_t* offset) {
+    if (*offset + 8 > bytes.size()) {
+        return Status::SerializationError("unexpected eof while reading u64");
+    }
+    uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) {
+        v |= static_cast<uint64_t>(bytes[*offset + i]) << (i * 8);
+    }
+    *offset += 8;
+    return v;
+}
+
+StatusOr<std::string> ReadString(const std::vector<uint8_t>& bytes, size_t* offset) {
+    auto len_or = ReadIntegral<uint32_t>(bytes, offset);
+    if (!len_or.ok()) {
+        return len_or.status();
+    }
+    const uint32_t len = len_or.value();
+    if (*offset + len > bytes.size()) {
+        return Status::SerializationError("unexpected eof while reading string");
+    }
+    std::string value(
+        reinterpret_cast<const char*>(bytes.data() + static_cast<ptrdiff_t>(*offset)), len);
+    *offset += len;
+    return value;
+}
+
+}  // namespace
+
+StatusOr<std::vector<uint8_t>> Serializer::Serialize(
+    const Module& module, bool include_debug_section) {
+    auto verify = Verifier::Verify(module);
+    if (!verify.status.ok()) {
+        return verify.status;
+    }
+
+    std::vector<uint8_t> out;
+    out.reserve(1024);
+    out.insert(out.end(), std::begin(kMagic), std::end(kMagic));
+    WriteU16(out, kFormatMajor);
+    WriteU16(out, kFormatMinor);
+
+    uint32_t flags = 0;
+    if (include_debug_section) {
+        flags |= kFlagDebug;
+    }
+    WriteU32(out, flags);
+    WriteString(out, module.name());
+    WriteU32(out, module.version().major);
+    WriteU32(out, module.version().minor);
+    WriteU32(out, module.version().patch);
+    WriteU32(out, module.entry_function());
+    WriteU32(out, static_cast<uint32_t>(module.constants().size()));
+    WriteU32(out, static_cast<uint32_t>(module.functions().size()));
+
+    for (const auto& constant : module.constants()) {
+        WriteU8(out, static_cast<uint8_t>(constant.type));
+        switch (constant.type) {
+            case ConstantType::kInt64:
+                WriteU64(out, static_cast<uint64_t>(constant.int64_value));
+                break;
+            case ConstantType::kFloat64: {
+                uint64_t bits = 0;
+                std::memcpy(&bits, &constant.float64_value, sizeof(bits));
+                WriteU64(out, bits);
+                break;
+            }
+            case ConstantType::kUtf8:
+                WriteString(out, constant.utf8_value);
+                break;
+        }
+    }
+
+    for (const auto& function : module.functions()) {
+        WriteString(out, function.name());
+        WriteU16(out, function.reg_count());
+        WriteU16(out, function.param_count());
+        const auto instructions = function.FlattenedInstructions();
+        WriteU32(out, static_cast<uint32_t>(instructions.size()));
+        for (const auto& inst : instructions) {
+            WriteU8(out, static_cast<uint8_t>(inst.opcode));
+            WriteU8(out, inst.flags);
+            WriteU16(out, inst.reserved);
+            WriteU32(out, inst.a);
+            WriteU32(out, inst.b);
+            WriteU32(out, inst.c);
+        }
+    }
+
+    if ((flags & kFlagDebug) != 0u) {
+        WriteU32(out, static_cast<uint32_t>(module.debug_lines().size()));
+        for (const auto& line : module.debug_lines()) {
+            WriteU32(out, line.function_index);
+            WriteU32(out, line.instruction_index);
+            WriteU32(out, line.line);
+            WriteU32(out, line.column);
+        }
+    }
+    return out;
+}
+
+StatusOr<Module> Serializer::Deserialize(const std::vector<uint8_t>& bytes) {
+    size_t offset = 0;
+    if (bytes.size() < 4 || std::memcmp(bytes.data(), kMagic, 4) != 0) {
+        return Status::SerializationError("invalid tbc magic");
+    }
+    offset += 4;
+
+    auto format_major_or = ReadIntegral<uint16_t>(bytes, &offset);
+    if (!format_major_or.ok()) {
+        return format_major_or.status();
+    }
+    auto format_minor_or = ReadIntegral<uint16_t>(bytes, &offset);
+    if (!format_minor_or.ok()) {
+        return format_minor_or.status();
+    }
+    if (format_major_or.value() != kFormatMajor) {
+        return Status::SerializationError("unsupported tbc major version");
+    }
+
+    auto flags_or = ReadIntegral<uint32_t>(bytes, &offset);
+    if (!flags_or.ok()) {
+        return flags_or.status();
+    }
+    const uint32_t flags = flags_or.value();
+
+    auto name_or = ReadString(bytes, &offset);
+    if (!name_or.ok()) {
+        return name_or.status();
+    }
+    Module module(name_or.value());
+
+    auto vmaj_or = ReadIntegral<uint32_t>(bytes, &offset);
+    auto vmin_or = ReadIntegral<uint32_t>(bytes, &offset);
+    auto vpat_or = ReadIntegral<uint32_t>(bytes, &offset);
+    if (!vmaj_or.ok() || !vmin_or.ok() || !vpat_or.ok()) {
+        return Status::SerializationError("failed reading module version");
+    }
+    module.version() = SemanticVersion{vmaj_or.value(), vmin_or.value(), vpat_or.value()};
+
+    auto entry_or = ReadIntegral<uint32_t>(bytes, &offset);
+    auto const_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+    auto func_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+    if (!entry_or.ok() || !const_count_or.ok() || !func_count_or.ok()) {
+        return Status::SerializationError("failed reading module header");
+    }
+    module.set_entry_function(entry_or.value());
+
+    for (uint32_t i = 0; i < const_count_or.value(); ++i) {
+        auto type_or = ReadIntegral<uint8_t>(bytes, &offset);
+        if (!type_or.ok()) {
+            return type_or.status();
+        }
+        const auto type = static_cast<ConstantType>(type_or.value());
+        switch (type) {
+            case ConstantType::kInt64: {
+                auto v_or = ReadIntegral<uint64_t>(bytes, &offset);
+                if (!v_or.ok()) {
+                    return v_or.status();
+                }
+                module.AddConstant(Constant::Int64(static_cast<int64_t>(v_or.value())));
+                break;
+            }
+            case ConstantType::kFloat64: {
+                auto v_or = ReadIntegral<uint64_t>(bytes, &offset);
+                if (!v_or.ok()) {
+                    return v_or.status();
+                }
+                double f = 0.0;
+                const uint64_t bits = v_or.value();
+                std::memcpy(&f, &bits, sizeof(f));
+                module.AddConstant(Constant::Float64(f));
+                break;
+            }
+            case ConstantType::kUtf8: {
+                auto s_or = ReadString(bytes, &offset);
+                if (!s_or.ok()) {
+                    return s_or.status();
+                }
+                module.AddConstant(Constant::Utf8(std::move(s_or.value())));
+                break;
+            }
+            default:
+                return Status::SerializationError("unknown constant type");
+        }
+    }
+
+    for (uint32_t i = 0; i < func_count_or.value(); ++i) {
+        auto fn_name_or = ReadString(bytes, &offset);
+        auto reg_or = ReadIntegral<uint16_t>(bytes, &offset);
+        auto param_or = ReadIntegral<uint16_t>(bytes, &offset);
+        auto inst_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+        if (!fn_name_or.ok() || !reg_or.ok() || !param_or.ok() || !inst_count_or.ok()) {
+            return Status::SerializationError("failed reading function header");
+        }
+
+        auto& fn = module.AddFunction(fn_name_or.value(), reg_or.value(), param_or.value());
+        auto& block = fn.AddBlock("entry");
+        for (uint32_t j = 0; j < inst_count_or.value(); ++j) {
+            auto opcode_or = ReadIntegral<uint8_t>(bytes, &offset);
+            auto flags_or2 = ReadIntegral<uint8_t>(bytes, &offset);
+            auto reserved_or = ReadIntegral<uint16_t>(bytes, &offset);
+            auto a_or = ReadIntegral<uint32_t>(bytes, &offset);
+            auto b_or = ReadIntegral<uint32_t>(bytes, &offset);
+            auto c_or = ReadIntegral<uint32_t>(bytes, &offset);
+            if (!opcode_or.ok() || !flags_or2.ok() || !reserved_or.ok() || !a_or.ok() ||
+                !b_or.ok() || !c_or.ok()) {
+                return Status::SerializationError("failed reading instruction");
+            }
+            block.Append(Instruction{
+                static_cast<OpCode>(opcode_or.value()),
+                flags_or2.value(),
+                reserved_or.value(),
+                a_or.value(),
+                b_or.value(),
+                c_or.value(),
+            });
+        }
+    }
+
+    if ((flags & kFlagDebug) != 0u) {
+        auto debug_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+        if (!debug_count_or.ok()) {
+            return debug_count_or.status();
+        }
+        for (uint32_t i = 0; i < debug_count_or.value(); ++i) {
+            auto fn_or = ReadIntegral<uint32_t>(bytes, &offset);
+            auto ip_or = ReadIntegral<uint32_t>(bytes, &offset);
+            auto line_or = ReadIntegral<uint32_t>(bytes, &offset);
+            auto col_or = ReadIntegral<uint32_t>(bytes, &offset);
+            if (!fn_or.ok() || !ip_or.ok() || !line_or.ok() || !col_or.ok()) {
+                return Status::SerializationError("failed reading debug line");
+            }
+            module.AddDebugLine(
+                DebugLineEntry{fn_or.value(), ip_or.value(), line_or.value(), col_or.value()});
+        }
+    }
+
+    auto verify = Verifier::Verify(module);
+    if (!verify.status.ok()) {
+        return verify.status;
+    }
+    return module;
+}
+
+Status Serializer::SerializeToFile(
+    const Module& module, const std::filesystem::path& path, bool include_debug_section) {
+    auto bytes_or = Serialize(module, include_debug_section);
+    if (!bytes_or.ok()) {
+        return bytes_or.status();
+    }
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        return Status::SerializationError("failed opening output file");
+    }
+    const auto& bytes = bytes_or.value();
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!out.good()) {
+        return Status::SerializationError("failed writing output file");
+    }
+    return Status::Ok();
+}
+
+StatusOr<Module> Serializer::DeserializeFromFile(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        return Status::NotFound("input file not found");
+    }
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return Deserialize(bytes);
+}
+
+}  // namespace tie::vm
+
