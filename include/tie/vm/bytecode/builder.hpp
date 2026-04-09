@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 #include "tie/vm/bytecode/module.hpp"
@@ -42,5 +43,19 @@ class DebugSectionBuilder {
     Module* module_;
 };
 
-}  // namespace tie::vm
+class FfiMetadataBuilder {
+  public:
+    explicit FfiMetadataBuilder(Module& module) : module_(&module) {}
 
+    uint32_t AddLibraryPath(std::string path);
+    uint32_t AddSignature(FunctionSignature signature);
+    uint32_t AddBinding(FfiSymbolBinding binding);
+    void BindFunctionHeader(
+        Function& function, CallingConvention convention, uint32_t signature_index,
+        uint32_t binding_index);
+
+  private:
+    Module* module_;
+};
+
+}  // namespace tie::vm

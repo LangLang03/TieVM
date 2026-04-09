@@ -99,5 +99,25 @@ void DebugSectionBuilder::AddLine(
     module_->AddDebugLine(DebugLineEntry{function_idx, instruction_idx, line, col});
 }
 
-}  // namespace tie::vm
+uint32_t FfiMetadataBuilder::AddLibraryPath(std::string path) {
+    return module_->AddFfiLibraryPath(std::move(path));
+}
 
+uint32_t FfiMetadataBuilder::AddSignature(FunctionSignature signature) {
+    return module_->AddFfiSignature(std::move(signature));
+}
+
+uint32_t FfiMetadataBuilder::AddBinding(FfiSymbolBinding binding) {
+    return module_->AddFfiBinding(std::move(binding));
+}
+
+void FfiMetadataBuilder::BindFunctionHeader(
+    Function& function, CallingConvention convention, uint32_t signature_index,
+    uint32_t binding_index) {
+    function.ffi_binding().enabled = true;
+    function.ffi_binding().convention = convention;
+    function.ffi_binding().signature_index = signature_index;
+    function.ffi_binding().binding_index = binding_index;
+}
+
+}  // namespace tie::vm

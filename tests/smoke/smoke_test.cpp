@@ -7,6 +7,18 @@
 
 namespace tie::vm {
 
+namespace {
+
+void LoadStdlibOrFail(VmInstance* vm) {
+    auto bundle_or = BuildStdlibBundle();
+    ASSERT_TRUE(bundle_or.ok()) << bundle_or.status().message();
+    const auto dir = test::TempPath("smoke_stdlib_bundle.tlbs");
+    ASSERT_TRUE(bundle_or.value().SerializeToDirectory(dir).ok());
+    ASSERT_TRUE(vm->loader().LoadTlbsFile(dir).ok());
+}
+
+}  // namespace
+
 TEST(Smoke, BytecodeLoadExecute) {
     Module module = test::BuildAddModule(40, 2);
     const auto path = test::TempPath("smoke.tbc");
@@ -210,6 +222,7 @@ TEST(Smoke, CompileAndRunHelloWorldAndChineseBytecode) {
     ASSERT_TRUE(parsed_or.ok()) << parsed_or.status().message();
 
     VmInstance vm;
+    LoadStdlibOrFail(&vm);
     std::string output;
     vm.SetOutputSink([&](const std::string& line) {
         output += line;
@@ -222,6 +235,27 @@ TEST(Smoke, CompileAndRunHelloWorldAndChineseBytecode) {
     EXPECT_NE(
         output.find("\xE4\xBD\xA0\xE5\xA5\xBD\xE4\xB8\x96\xE7\x95\x8C"),
         std::string::npos);
+}
+
+TEST(Smoke, IntentionalErrorBytecodeProducesStructuredStack) {
+    Module module("smoke.error.stack");
+    const auto one = module.AddConstant(Constant::Int64(1));
+    const auto zero = module.AddConstant(Constant::Int64(0));
+    auto& fn = module.AddFunction("entry", 4, 0);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb).LoadK(1, one).LoadK(2, zero).Div(0, 1, 2).Ret(0);
+    DebugSectionBuilder dbg(module);
+    dbg.AddLine(0, 0, 10, 1);
+    dbg.AddLine(0, 1, 11, 1);
+    dbg.AddLine(0, 2, 12, 1);
+    dbg.AddLine(0, 3, 13, 1);
+    module.set_entry_function(0);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    ASSERT_FALSE(result_or.ok());
+    ASSERT_TRUE(result_or.status().vm_error().has_value());
+    EXPECT_FALSE(result_or.status().vm_error()->frames.empty());
 }
 
 }  // namespace tie::vm

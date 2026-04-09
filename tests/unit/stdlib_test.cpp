@@ -3,11 +3,25 @@
 #include <algorithm>
 
 #include "tie/vm/api.hpp"
+#include "test_helpers.hpp"
 
 namespace tie::vm {
 
+namespace {
+
+void LoadStdlibOrFail(VmInstance* vm) {
+    auto bundle_or = BuildStdlibBundle();
+    ASSERT_TRUE(bundle_or.ok()) << bundle_or.status().message();
+    const auto dir = test::TempPath("stdlib_bundle.tlbs");
+    ASSERT_TRUE(bundle_or.value().SerializeToDirectory(dir).ok());
+    ASSERT_TRUE(vm->loader().LoadTlbsFile(dir).ok());
+}
+
+}  // namespace
+
 TEST(StdlibTest, StringConcatAndLength) {
     VmInstance vm;
+    LoadStdlibOrFail(&vm);
     Module module("stdlib.string.test");
     const auto hello = module.AddConstant(Constant::Utf8("hello "));
     const auto world = module.AddConstant(Constant::Utf8("world"));
@@ -32,6 +46,7 @@ TEST(StdlibTest, StringConcatAndLength) {
 
 TEST(StdlibTest, CollectionsArrayAndMap) {
     VmInstance vm;
+    LoadStdlibOrFail(&vm);
 
     Module array_module("stdlib.array.test");
     const auto sym_array_new =

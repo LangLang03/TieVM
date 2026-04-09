@@ -5,6 +5,8 @@
 #include <string>
 #include <utility>
 
+#include "tie/vm/common/vm_error.hpp"
+
 namespace tie::vm {
 
 enum class ErrorCode : uint32_t {
@@ -25,7 +27,13 @@ class Status {
   public:
     Status() = default;
     Status(ErrorCode code, std::string message)
-        : code_(code), message_(std::move(message)) {}
+        : code_(code), message_(std::move(message)) {
+        if (code_ != ErrorCode::kOk) {
+            error_ = VmError{message_, {}};
+        }
+    }
+    Status(ErrorCode code, std::string message, VmError error)
+        : code_(code), message_(std::move(message)), error_(std::move(error)) {}
 
     static Status Ok() { return {}; }
 
@@ -53,6 +61,10 @@ class Status {
         return {ErrorCode::kRuntimeError, std::move(message)};
     }
 
+    static Status RuntimeError(VmError error) {
+        return {ErrorCode::kRuntimeError, error.message, std::move(error)};
+    }
+
     static Status SerializationError(std::string message) {
         return {ErrorCode::kSerializationError, std::move(message)};
     }
@@ -65,6 +77,10 @@ class Status {
         return {ErrorCode::kFfiError, std::move(message)};
     }
 
+    static Status FfiError(VmError error) {
+        return {ErrorCode::kFfiError, error.message, std::move(error)};
+    }
+
     static Status Unsupported(std::string message) {
         return {ErrorCode::kUnsupported, std::move(message)};
     }
@@ -72,10 +88,24 @@ class Status {
     [[nodiscard]] bool ok() const { return code_ == ErrorCode::kOk; }
     [[nodiscard]] ErrorCode code() const { return code_; }
     [[nodiscard]] const std::string& message() const { return message_; }
+    [[nodiscard]] const std::optional<VmError>& vm_error() const { return error_; }
+
+    [[nodiscard]] Status WithFrame(StackFrame frame) const {
+        if (ok()) {
+            return *this;
+        }
+        Status copy = *this;
+        if (!copy.error_.has_value()) {
+            copy.error_ = VmError{copy.message_, {}};
+        }
+        copy.error_->PushFrame(std::move(frame));
+        return copy;
+    }
 
   private:
     ErrorCode code_ = ErrorCode::kOk;
     std::string message_;
+    std::optional<VmError> error_;
 };
 
 template <typename T>
@@ -98,4 +128,3 @@ class [[nodiscard]] StatusOr {
 };
 
 }  // namespace tie::vm
-

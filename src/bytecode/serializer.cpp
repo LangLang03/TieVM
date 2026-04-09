@@ -11,8 +11,10 @@ namespace {
 
 constexpr uint8_t kMagic[4] = {'T', 'B', 'C', '0'};
 constexpr uint16_t kFormatMajor = 0;
-constexpr uint16_t kFormatMinor = 1;
+constexpr uint16_t kFormatMinor = 2;
+constexpr uint16_t kLegacyFormatMinor = 1;
 constexpr uint32_t kFlagDebug = 1u << 0;
+constexpr uint32_t kFlagFfiMetadata = 1u << 1;
 
 void WriteU8(std::vector<uint8_t>& out, uint8_t value) { out.push_back(value); }
 
@@ -36,6 +38,15 @@ void WriteU64(std::vector<uint8_t>& out, uint64_t value) {
 void WriteString(std::vector<uint8_t>& out, const std::string& value) {
     WriteU32(out, static_cast<uint32_t>(value.size()));
     out.insert(out.end(), value.begin(), value.end());
+}
+
+void WriteAbiType(std::vector<uint8_t>& out, const AbiType& type) {
+    WriteU8(out, static_cast<uint8_t>(type.kind));
+    WriteU8(out, static_cast<uint8_t>(type.ownership));
+    WriteU8(out, static_cast<uint8_t>(type.passing));
+    WriteU8(out, 0);
+    WriteU32(out, type.struct_index);
+    WriteU32(out, type.size);
 }
 
 template <typename T>
@@ -104,6 +115,39 @@ StatusOr<std::string> ReadString(const std::vector<uint8_t>& bytes, size_t* offs
     return value;
 }
 
+StatusOr<AbiType> ReadAbiType(const std::vector<uint8_t>& bytes, size_t* offset) {
+    auto kind_or = ReadIntegral<uint8_t>(bytes, offset);
+    auto ownership_or = ReadIntegral<uint8_t>(bytes, offset);
+    auto passing_or = ReadIntegral<uint8_t>(bytes, offset);
+    auto reserved_or = ReadIntegral<uint8_t>(bytes, offset);
+    auto struct_or = ReadIntegral<uint32_t>(bytes, offset);
+    auto size_or = ReadIntegral<uint32_t>(bytes, offset);
+    if (!kind_or.ok() || !ownership_or.ok() || !passing_or.ok() || !reserved_or.ok() ||
+        !struct_or.ok() || !size_or.ok()) {
+        return Status::SerializationError("failed reading abi type");
+    }
+    AbiType type;
+    type.kind = static_cast<AbiValueKind>(kind_or.value());
+    type.ownership = static_cast<OwnershipQualifier>(ownership_or.value());
+    type.passing = static_cast<FfiPassingMode>(passing_or.value());
+    type.struct_index = struct_or.value();
+    type.size = size_or.value();
+    return type;
+}
+
+bool HasAnyFfiMetadata(const Module& module) {
+    if (!module.ffi_library_paths().empty() || !module.ffi_structs().empty() ||
+        !module.ffi_signatures().empty() || !module.ffi_bindings().empty()) {
+        return true;
+    }
+    for (const auto& function : module.functions()) {
+        if (function.ffi_binding().enabled) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 StatusOr<std::vector<uint8_t>> Serializer::Serialize(
@@ -114,7 +158,7 @@ StatusOr<std::vector<uint8_t>> Serializer::Serialize(
     }
 
     std::vector<uint8_t> out;
-    out.reserve(1024);
+    out.reserve(2048);
     out.insert(out.end(), std::begin(kMagic), std::end(kMagic));
     WriteU16(out, kFormatMajor);
     WriteU16(out, kFormatMinor);
@@ -122,6 +166,9 @@ StatusOr<std::vector<uint8_t>> Serializer::Serialize(
     uint32_t flags = 0;
     if (include_debug_section) {
         flags |= kFlagDebug;
+    }
+    if (HasAnyFfiMetadata(module)) {
+        flags |= kFlagFfiMetadata;
     }
     WriteU32(out, flags);
     WriteString(out, module.name());
@@ -154,6 +201,12 @@ StatusOr<std::vector<uint8_t>> Serializer::Serialize(
         WriteString(out, function.name());
         WriteU16(out, function.reg_count());
         WriteU16(out, function.param_count());
+        WriteU8(out, function.ffi_binding().enabled ? 1 : 0);
+        WriteU8(out, static_cast<uint8_t>(function.ffi_binding().convention));
+        WriteU16(out, 0);
+        WriteU32(out, function.ffi_binding().signature_index);
+        WriteU32(out, function.ffi_binding().binding_index);
+
         const auto instructions = function.FlattenedInstructions();
         WriteU32(out, static_cast<uint32_t>(instructions.size()));
         for (const auto& inst : instructions) {
@@ -175,6 +228,47 @@ StatusOr<std::vector<uint8_t>> Serializer::Serialize(
             WriteU32(out, line.column);
         }
     }
+
+    if ((flags & kFlagFfiMetadata) != 0u) {
+        WriteU32(out, static_cast<uint32_t>(module.ffi_library_paths().size()));
+        for (const auto& path : module.ffi_library_paths()) {
+            WriteString(out, path);
+        }
+
+        WriteU32(out, static_cast<uint32_t>(module.ffi_structs().size()));
+        for (const auto& layout : module.ffi_structs()) {
+            WriteString(out, layout.name);
+            WriteU32(out, layout.size);
+            WriteU32(out, layout.alignment);
+            WriteU32(out, static_cast<uint32_t>(layout.fields.size()));
+            for (const auto& field : layout.fields) {
+                WriteU32(out, field.offset);
+                WriteAbiType(out, field.type);
+            }
+        }
+
+        WriteU32(out, static_cast<uint32_t>(module.ffi_signatures().size()));
+        for (const auto& signature : module.ffi_signatures()) {
+            WriteString(out, signature.name);
+            WriteU8(out, static_cast<uint8_t>(signature.convention));
+            WriteU8(out, 0);
+            WriteU16(out, 0);
+            WriteAbiType(out, signature.return_type);
+            WriteU32(out, static_cast<uint32_t>(signature.params.size()));
+            for (const auto& param : signature.params) {
+                WriteAbiType(out, param);
+            }
+        }
+
+        WriteU32(out, static_cast<uint32_t>(module.ffi_bindings().size()));
+        for (const auto& binding : module.ffi_bindings()) {
+            WriteString(out, binding.vm_symbol);
+            WriteString(out, binding.native_symbol);
+            WriteU32(out, binding.library_index);
+            WriteU32(out, binding.signature_index);
+        }
+    }
+
     return out;
 }
 
@@ -193,8 +287,13 @@ StatusOr<Module> Serializer::Deserialize(const std::vector<uint8_t>& bytes) {
     if (!format_minor_or.ok()) {
         return format_minor_or.status();
     }
-    if (format_major_or.value() != kFormatMajor) {
+    const uint16_t format_major = format_major_or.value();
+    const uint16_t format_minor = format_minor_or.value();
+    if (format_major != kFormatMajor) {
         return Status::SerializationError("unsupported tbc major version");
+    }
+    if (format_minor != kLegacyFormatMinor && format_minor != kFormatMinor) {
+        return Status::SerializationError("unsupported tbc minor version");
     }
 
     auto flags_or = ReadIntegral<uint32_t>(bytes, &offset);
@@ -268,12 +367,33 @@ StatusOr<Module> Serializer::Deserialize(const std::vector<uint8_t>& bytes) {
         auto fn_name_or = ReadString(bytes, &offset);
         auto reg_or = ReadIntegral<uint16_t>(bytes, &offset);
         auto param_or = ReadIntegral<uint16_t>(bytes, &offset);
-        auto inst_count_or = ReadIntegral<uint32_t>(bytes, &offset);
-        if (!fn_name_or.ok() || !reg_or.ok() || !param_or.ok() || !inst_count_or.ok()) {
+        if (!fn_name_or.ok() || !reg_or.ok() || !param_or.ok()) {
             return Status::SerializationError("failed reading function header");
         }
 
         auto& fn = module.AddFunction(fn_name_or.value(), reg_or.value(), param_or.value());
+        if (format_minor >= kFormatMinor) {
+            auto ffi_enabled_or = ReadIntegral<uint8_t>(bytes, &offset);
+            auto ffi_convention_or = ReadIntegral<uint8_t>(bytes, &offset);
+            auto ffi_reserved_or = ReadIntegral<uint16_t>(bytes, &offset);
+            auto ffi_signature_or = ReadIntegral<uint32_t>(bytes, &offset);
+            auto ffi_binding_or = ReadIntegral<uint32_t>(bytes, &offset);
+            if (!ffi_enabled_or.ok() || !ffi_convention_or.ok() || !ffi_reserved_or.ok() ||
+                !ffi_signature_or.ok() || !ffi_binding_or.ok()) {
+                return Status::SerializationError("failed reading ffi function header");
+            }
+            fn.ffi_binding().enabled = ffi_enabled_or.value() != 0;
+            fn.ffi_binding().convention =
+                static_cast<CallingConvention>(ffi_convention_or.value());
+            fn.ffi_binding().signature_index = ffi_signature_or.value();
+            fn.ffi_binding().binding_index = ffi_binding_or.value();
+        }
+
+        auto inst_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+        if (!inst_count_or.ok()) {
+            return Status::SerializationError("failed reading function instruction count");
+        }
+
         auto& block = fn.AddBlock("entry");
         for (uint32_t j = 0; j < inst_count_or.value(); ++j) {
             auto opcode_or = ReadIntegral<uint8_t>(bytes, &offset);
@@ -315,6 +435,100 @@ StatusOr<Module> Serializer::Deserialize(const std::vector<uint8_t>& bytes) {
         }
     }
 
+    if ((flags & kFlagFfiMetadata) != 0u) {
+        if (format_minor < kFormatMinor) {
+            return Status::SerializationError("ffi metadata requires tbc format v0.2+");
+        }
+
+        auto lib_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+        if (!lib_count_or.ok()) {
+            return lib_count_or.status();
+        }
+        for (uint32_t i = 0; i < lib_count_or.value(); ++i) {
+            auto path_or = ReadString(bytes, &offset);
+            if (!path_or.ok()) {
+                return path_or.status();
+            }
+            module.AddFfiLibraryPath(std::move(path_or.value()));
+        }
+
+        auto struct_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+        if (!struct_count_or.ok()) {
+            return struct_count_or.status();
+        }
+        for (uint32_t i = 0; i < struct_count_or.value(); ++i) {
+            auto name_or = ReadString(bytes, &offset);
+            auto size_or = ReadIntegral<uint32_t>(bytes, &offset);
+            auto align_or = ReadIntegral<uint32_t>(bytes, &offset);
+            auto field_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+            if (!name_or.ok() || !size_or.ok() || !align_or.ok() || !field_count_or.ok()) {
+                return Status::SerializationError("failed reading ffi struct header");
+            }
+            FfiStructLayout layout;
+            layout.name = std::move(name_or.value());
+            layout.size = size_or.value();
+            layout.alignment = align_or.value();
+            for (uint32_t f = 0; f < field_count_or.value(); ++f) {
+                auto offset_or = ReadIntegral<uint32_t>(bytes, &offset);
+                auto type_or = ReadAbiType(bytes, &offset);
+                if (!offset_or.ok() || !type_or.ok()) {
+                    return Status::SerializationError("failed reading ffi struct field");
+                }
+                layout.fields.push_back(FfiStructField{offset_or.value(), type_or.value()});
+            }
+            module.AddFfiStruct(std::move(layout));
+        }
+
+        auto sig_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+        if (!sig_count_or.ok()) {
+            return sig_count_or.status();
+        }
+        for (uint32_t i = 0; i < sig_count_or.value(); ++i) {
+            auto name_or = ReadString(bytes, &offset);
+            auto convention_or = ReadIntegral<uint8_t>(bytes, &offset);
+            auto reserved8_or = ReadIntegral<uint8_t>(bytes, &offset);
+            auto reserved16_or = ReadIntegral<uint16_t>(bytes, &offset);
+            auto ret_or = ReadAbiType(bytes, &offset);
+            auto param_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+            if (!name_or.ok() || !convention_or.ok() || !reserved8_or.ok() ||
+                !reserved16_or.ok() || !ret_or.ok() || !param_count_or.ok()) {
+                return Status::SerializationError("failed reading ffi signature header");
+            }
+            FunctionSignature signature;
+            signature.name = std::move(name_or.value());
+            signature.convention = static_cast<CallingConvention>(convention_or.value());
+            signature.return_type = ret_or.value();
+            for (uint32_t p = 0; p < param_count_or.value(); ++p) {
+                auto param_or = ReadAbiType(bytes, &offset);
+                if (!param_or.ok()) {
+                    return Status::SerializationError("failed reading ffi signature param");
+                }
+                signature.params.push_back(param_or.value());
+            }
+            module.AddFfiSignature(std::move(signature));
+        }
+
+        auto binding_count_or = ReadIntegral<uint32_t>(bytes, &offset);
+        if (!binding_count_or.ok()) {
+            return binding_count_or.status();
+        }
+        for (uint32_t i = 0; i < binding_count_or.value(); ++i) {
+            auto vm_symbol_or = ReadString(bytes, &offset);
+            auto native_symbol_or = ReadString(bytes, &offset);
+            auto lib_index_or = ReadIntegral<uint32_t>(bytes, &offset);
+            auto sig_index_or = ReadIntegral<uint32_t>(bytes, &offset);
+            if (!vm_symbol_or.ok() || !native_symbol_or.ok() || !lib_index_or.ok() ||
+                !sig_index_or.ok()) {
+                return Status::SerializationError("failed reading ffi binding");
+            }
+            module.AddFfiBinding(FfiSymbolBinding{
+                std::move(vm_symbol_or.value()),
+                std::move(native_symbol_or.value()),
+                lib_index_or.value(),
+                sig_index_or.value()});
+        }
+    }
+
     auto verify = Verifier::Verify(module);
     if (!verify.status.ok()) {
         return verify.status;
@@ -350,4 +564,3 @@ StatusOr<Module> Serializer::DeserializeFromFile(const std::filesystem::path& pa
 }
 
 }  // namespace tie::vm
-

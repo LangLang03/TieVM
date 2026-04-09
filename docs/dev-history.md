@@ -1,26 +1,59 @@
 # TieVM 开发历史
 
-## 2026-04-09 M0 初始化
+## 2026-04-09 M0-M1 工程与字节码基础
+- 初始化工程结构、`xmake` 构建链路、`tievm/tiebc/tievm_tests` 目标。
+- 完成 `.tbc` 指令集、构建器、序列化器、校验器。
+- 完成 `tiebc` 基础命令（检查、反汇编、标准库构建、示例字节码生成）。
 
-- 初始化仓库结构与 xmake 构建。
-- 建立 CI（Clang 主线 + GCC 兼容）与 clang-tidy 静态检查。
-- 固化编码规范（clang-format/clang-tidy）与 GPL-3.0-only 许可声明。
+## 2026-04-09 M2-M7 运行时首版能力
+- 完成 `VmInstance/VmThread` 解释执行主路径。
+- 完成对象模型、多继承与反射基础能力。
+- 完成 GC 控制器接口与并发收集基础实现。
+- 完成热加载会话、模块加载器、AOT 占位管线。
+- 建立单元测试与冒烟测试基线。
 
-## 2026-04-09 M1-M7 首版能力落地
+## 2026-04-09 CLI 模块化重构
+- `tiebc` 按职责拆分为 `disasm/emit/struct/dispatch`。
+- `tievm` 按职责拆分为 `dispatch/run_tbc/run_tlb`。
+- 保持行为兼容并通过现有 smoke 回归。
 
-- 完成 `.tbc` 字节码 API（Module/Function/BasicBlock/InstructionBuilder/Verifier/Serializer）。
-- 完成运行时（VmInstance/VmThread/ExceptionBridge/ModuleLoader/HotReloadSession）。
-- 完成 OOP + 反射核心（多继承、C3 线性化、动态调用）。
-- 完成 GC 控制器（分代、并发收集入口、Pin/Weak/Phantom/finalizer）。
-- 完成 FFI 桥接（调用约定元数据、显式所有权、线程 attach/detach）。
-- 完成 `tlb` 容器格式与热加载原子切换机制。
-- 完成 AOT 占位管线接口及元数据导出。
-- 完成单元测试与冒烟测试集。
+## 2026-04-09 FFI/标准库重构（本次）
+- 引入结构化错误模型：`VmError + StackFrame`，`Status` 可携带错误栈。
+- `.tbc` 升级到 `0.2`：新增 FFI 扩展段（库路径、签名、绑定、结构体布局）与函数头 FFI 绑定元信息。
+- 新增 FFI 元数据构建 API：`FfiMetadataBuilder`。
+- `FfiBridge` 升级为“绑定驱动 + 动态库调用”：
+  - 支持 `LoadLibrary/GetProcAddress` 与 `dlopen/dlsym`。
+  - 支持运行时类型映射、指针与 `in/out/inout` 语义、结构体按值（<=8 字节）与指针传递。
+  - 保留 `RegisterFunction` 兼容通道（非标准库路径）。
+- 移除 VM 启动时内置标准库注册，`StdlibRegistry::RegisterCore` 改为显式 `Unsupported`。
+- 新增 `.tlbs` 包规范与实现：
+  - 同后缀双格式：目录包与 zip 包自动识别。
+  - 固定布局：`manifest.toml + modules/*.tbc + libs/<platform>/<arch>/*`。
+  - 新增 `TlbsBundle`（目录/zip 读写、manifest 解析）。
+- `ModuleLoader` 新增 `.tlbs` 加载：
+  - zip 自动物化到临时目录。
+  - FFI 库相对路径改写为绝对路径。
+  - 同名符号冲突拒绝加载。
+- 新增原生标准库动态库 `tievm_std_native`，`stdlib` 模块改为 FFI 绑定驱动。
+- `tiebc` 增强：
+  - 新增 `build-stdlib-tlbs / tlbs-check / tlbs-pack / tlbs-unpack / tlbs-struct`。
+  - `disasm` 可显示 FFI 函数头、签名表、绑定表、库映射。
+- `tievm` 增强：
+  - 支持运行 `.tlbs`。
+  - `.tbc` 运行时可自动尝试加载同目录 `stdlib.tlbs`。
+  - 运行时错误输出结构化栈。
+- 新增/更新测试：
+  - `.tbc` FFI 扩展段序列化回归。
+  - `.tlbs` 目录/zip 往返测试与加载器测试。
+  - 动态库 FFI 集成测试（直接调用 `add`、指针 `inout`、结构体按值、错误栈）。
+  - OOP 与故意报错字节码回归。
+  - HelloWorld + 中文字节码运行回归。
 
-## 2026-04-09 标准库能力扩展
-
-- 标准库从 marker 占位升级为真实实现，新增 `StdlibRegistry` 自动注册流程。
-- `tie.std.string` 提供 `concat/length/utf8_validate/codepoints/slice`。
-- `tie.std.collections` 提供 `array_new/push/get/size` 与 `map_new/set/get/has`。
-- `tie.std.io` 提供 `print/read_text/write_text`，并支持测试输出捕获。
-- 新增“编译并运行 HelloWorld + 中文输出字节码”冒烟测试。
+## 质量结果（本次）
+- `xmake` 全量构建通过。
+- `tievm_tests` 全量通过（当前 33/33）。
+- 关键 CLI 冒烟通过：
+  - `tiebc build-stdlib-tlbs`
+  - `tiebc emit-hello`
+  - `tiebc disasm`（`.tbc/.tlbs`）
+  - `tievm run`（Hello + 中文输出）。

@@ -52,4 +52,37 @@ TEST(TlbLoaderTest, HotReloadRejectsVersionConflictForSameNameInBatch) {
     EXPECT_FALSE(status.ok());
 }
 
+TEST(TlbLoaderTest, TlbsDirectoryAndZipRoundTrip) {
+    auto bundle_or = BuildStdlibBundle();
+    ASSERT_TRUE(bundle_or.ok()) << bundle_or.status().message();
+
+    const auto dir = test::TempPath("stdlib_dir.tlbs");
+    ASSERT_TRUE(bundle_or.value().SerializeToDirectory(dir).ok());
+    const auto dir_loaded_or = TlbsBundle::Deserialize(dir);
+    ASSERT_TRUE(dir_loaded_or.ok()) << dir_loaded_or.status().message();
+    EXPECT_EQ(
+        dir_loaded_or.value().manifest().modules.size(),
+        bundle_or.value().manifest().modules.size());
+
+    const auto zip = test::TempPath("stdlib_zip.tlbs");
+    ASSERT_TRUE(bundle_or.value().SerializeToZip(zip).ok());
+    const auto zip_loaded_or = TlbsBundle::Deserialize(zip);
+    ASSERT_TRUE(zip_loaded_or.ok()) << zip_loaded_or.status().message();
+    EXPECT_EQ(
+        zip_loaded_or.value().manifest().modules.size(),
+        bundle_or.value().manifest().modules.size());
+}
+
+TEST(TlbLoaderTest, ModuleLoaderCanLoadTlbsBundle) {
+    auto bundle_or = BuildStdlibBundle();
+    ASSERT_TRUE(bundle_or.ok()) << bundle_or.status().message();
+    const auto dir = test::TempPath("loader_stdlib.tlbs");
+    ASSERT_TRUE(bundle_or.value().SerializeToDirectory(dir).ok());
+
+    ModuleLoader loader;
+    ASSERT_TRUE(loader.LoadTlbsFile(dir).ok());
+    const auto names = loader.ActiveModuleNames();
+    EXPECT_FALSE(names.empty());
+}
+
 }  // namespace tie::vm

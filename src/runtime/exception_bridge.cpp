@@ -11,7 +11,7 @@ StatusOr<Value> ExceptionBridge::Run(const std::function<StatusOr<Value>()>& fn)
     try {
         return fn();
     } catch (const VmException& ex) {
-        return Status::RuntimeError(ex.what());
+        return Status::RuntimeError(ex.error());
     } catch (const std::exception& ex) {
         return Status::RuntimeError(ex.what());
     } catch (...) {
@@ -20,4 +20,3 @@ StatusOr<Value> ExceptionBridge::Run(const std::function<StatusOr<Value>()>& fn)
 }
 
 }  // namespace tie::vm
-

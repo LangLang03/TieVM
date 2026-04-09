@@ -2,23 +2,15 @@
 
 #include <fstream>
 #include <iostream>
-#include <stdexcept>
 #include <utility>
 
 #include "tie/vm/runtime/vm_thread.hpp"
-#include "tie/vm/stdlib/stdlib_registry.hpp"
 
 namespace tie::vm {
 
 VmInstance::VmInstance()
     : output_sink_([](const std::string& line) { std::cout << line << "\n"; }),
-      reflection_(&object_model_) {
-    const auto register_status = StdlibRegistry::RegisterCore(this);
-    if (!register_status.ok()) {
-        throw std::runtime_error(
-            "failed to register stdlib: " + register_status.message());
-    }
-}
+      reflection_(&object_model_) {}
 
 StatusOr<Value> VmInstance::ExecuteModule(const Module& module, const std::vector<Value>& args) {
     return exception_bridge_.Run([&]() {

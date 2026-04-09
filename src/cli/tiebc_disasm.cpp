@@ -1,6 +1,5 @@
 #include "tiebc_commands.hpp"
 
-#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -12,37 +11,6 @@
 namespace tie::vm::cli {
 
 namespace {
-
-int Usage() {
-    std::cerr << "Usage:\n";
-    std::cerr << "  tiebc check <file.tbc>\n";
-    std::cerr << "  tiebc disasm <file.tbc>\n";
-    std::cerr << "  tiebc disasm <file.tlb>\n";
-    std::cerr << "  tiebc map <file.tlb>\n";
-    std::cerr << "  tiebc tlb-struct\n";
-    std::cerr << "  tiebc tbc-struct\n";
-    std::cerr << "  tiebc build-stdlib <output.tlb>\n";
-    std::cerr << "  tiebc emit-hello <output.tbc>\n";
-    return 1;
-}
-
-int Check(const std::filesystem::path& path) {
-    auto module_or = Serializer::DeserializeFromFile(path);
-    if (!module_or.ok()) {
-        std::cerr << "deserialize failed: " << module_or.status().message() << "\n";
-        return 2;
-    }
-    auto verify = Verifier::Verify(module_or.value());
-    if (!verify.status.ok()) {
-        std::cerr << "verify failed: " << verify.status.message() << "\n";
-        return 3;
-    }
-    std::cout << "OK\n";
-    for (const auto& warning : verify.warnings) {
-        std::cout << "warning: " << warning << "\n";
-    }
-    return 0;
-}
 
 std::string EscapeText(const std::string& text) {
     std::ostringstream out;
@@ -150,7 +118,8 @@ std::string FormatInstruction(
             out << Reg(inst.a) << " <- " << Reg(inst.b);
             break;
         case OpCode::kLoadK:
-            out << Reg(inst.a) << " <- const[" << inst.b << "] " << ConstantSummary(module, inst.b);
+            out << Reg(inst.a) << " <- const[" << inst.b << "] "
+                << ConstantSummary(module, inst.b);
             break;
         case OpCode::kAdd:
             out << Reg(inst.a) << " <- " << Reg(inst.b) << " + " << Reg(inst.c);
@@ -202,7 +171,8 @@ std::string FormatInstruction(
             break;
         case OpCode::kInvoke:
             out << Reg(inst.a) << " <- invoke " << Reg(inst.a) << "."
-                << EscapeText(Utf8ConstantOrFallback(module, inst.b)) << FormatArgs(inst.a, inst.c);
+                << EscapeText(Utf8ConstantOrFallback(module, inst.b))
+                << FormatArgs(inst.a, inst.c);
             break;
     }
     return out.str();
@@ -218,6 +188,30 @@ void PrintConstantTable(const Module& module) {
 
 void PrintFfiMap(const Module& module) {
     std::cout << "ffi-map:\n";
+    if (!module.ffi_library_paths().empty()) {
+        std::cout << "  ffi-libraries:\n";
+        for (size_t i = 0; i < module.ffi_library_paths().size(); ++i) {
+            std::cout << "    lib[" << i << "] = " << module.ffi_library_paths()[i] << "\n";
+        }
+    }
+    if (!module.ffi_signatures().empty()) {
+        std::cout << "  ffi-signatures:\n";
+        for (size_t i = 0; i < module.ffi_signatures().size(); ++i) {
+            const auto& sig = module.ffi_signatures()[i];
+            std::cout << "    sig[" << i << "] " << sig.name
+                      << " cc=" << static_cast<uint32_t>(sig.convention)
+                      << " params=" << sig.params.size() << "\n";
+        }
+    }
+    if (!module.ffi_bindings().empty()) {
+        std::cout << "  ffi-bindings:\n";
+        for (size_t i = 0; i < module.ffi_bindings().size(); ++i) {
+            const auto& binding = module.ffi_bindings()[i];
+            std::cout << "    bind[" << i << "] " << binding.vm_symbol << " -> "
+                      << binding.native_symbol << " lib=" << binding.library_index
+                      << " sig=" << binding.signature_index << "\n";
+        }
+    }
     for (const auto& fn : module.functions()) {
         std::unordered_set<std::string> dedup;
         const auto code = fn.FlattenedInstructions();
@@ -240,7 +234,33 @@ void PrintFfiMap(const Module& module) {
         for (const auto& sym : dedup) {
             std::cout << "  " << fn.name() << " -> " << sym << "\n";
         }
+        if (fn.ffi_binding().enabled) {
+            std::cout << "  " << fn.name() << " [ffi-header] cc="
+                      << static_cast<uint32_t>(fn.ffi_binding().convention)
+                      << " sig=" << fn.ffi_binding().signature_index
+                      << " bind=" << fn.ffi_binding().binding_index << "\n";
+        }
     }
+}
+
+}  // namespace
+
+int Check(const std::filesystem::path& path) {
+    auto module_or = Serializer::DeserializeFromFile(path);
+    if (!module_or.ok()) {
+        std::cerr << "deserialize failed: " << module_or.status().message() << "\n";
+        return 2;
+    }
+    auto verify = Verifier::Verify(module_or.value());
+    if (!verify.status.ok()) {
+        std::cerr << "verify failed: " << verify.status.message() << "\n";
+        return 3;
+    }
+    std::cout << "OK\n";
+    for (const auto& warning : verify.warnings) {
+        std::cout << "warning: " << warning << "\n";
+    }
+    return 0;
 }
 
 int DisasmTbc(const std::filesystem::path& path) {
@@ -259,8 +279,8 @@ int DisasmTbc(const std::filesystem::path& path) {
         const auto code = fn.FlattenedInstructions();
         for (size_t i = 0; i < code.size(); ++i) {
             const auto& inst = code[i];
-            std::cout << "  " << i << ": " << OpCodeName(inst.opcode) << " " << inst.a << ", "
-                      << inst.b << ", " << inst.c << "    ; "
+            std::cout << "  " << i << ": " << OpCodeName(inst.opcode) << " " << inst.a
+                      << ", " << inst.b << ", " << inst.c << "    ; "
                       << FormatInstruction(module, inst, i, code.size()) << "\n";
         }
     }
@@ -269,6 +289,40 @@ int DisasmTbc(const std::filesystem::path& path) {
 }
 
 int DisasmTlb(const std::filesystem::path& path) {
+    if (path.extension() == ".tlbs") {
+        auto bundle_or = TlbsBundle::Deserialize(path);
+        if (!bundle_or.ok()) {
+            std::cerr << "tlbs deserialize failed: " << bundle_or.status().message() << "\n";
+            return 2;
+        }
+        const auto& bundle = bundle_or.value();
+        std::cout << "tlbs " << bundle.manifest().name << " v"
+                  << bundle.manifest().version.ToString() << "\n";
+        std::cout << "modules=" << bundle.manifest().modules.size()
+                  << " libraries=" << bundle.libraries().size() << "\n";
+        for (size_t i = 0; i < bundle.manifest().modules.size(); ++i) {
+            const auto& module_path = bundle.manifest().modules[i];
+            auto mod_it = bundle.modules().find(module_path);
+            if (mod_it == bundle.modules().end()) {
+                std::cout << "module[" << i << "] missing bytes for " << module_path << "\n";
+                continue;
+            }
+            auto module_or = Serializer::Deserialize(mod_it->second);
+            if (!module_or.ok()) {
+                std::cout << "module[" << i << "] parse failed: "
+                          << module_or.status().message() << "\n";
+                continue;
+            }
+            const auto& module = module_or.value();
+            std::cout << "module[" << i << "] path=" << module_path << " name=" << module.name()
+                      << " funcs=" << module.functions().size()
+                      << " consts=" << module.constants().size() << "\n";
+            PrintConstantTable(module);
+            PrintFfiMap(module);
+        }
+        return 0;
+    }
+
     auto tlb_or = TlbContainer::DeserializeFromFile(path);
     if (!tlb_or.ok()) {
         std::cerr << "tlb deserialize failed: " << tlb_or.status().message() << "\n";
@@ -291,7 +345,8 @@ int DisasmTlb(const std::filesystem::path& path) {
 
         auto module_or = Serializer::Deserialize(entry.bytecode);
         if (!module_or.ok()) {
-            std::cout << "  parse-bytecode-failed: " << module_or.status().message() << "\n";
+            std::cout << "  parse-bytecode-failed: " << module_or.status().message()
+                      << "\n";
             continue;
         }
         const auto& module = module_or.value();
@@ -304,120 +359,4 @@ int DisasmTlb(const std::filesystem::path& path) {
     return 0;
 }
 
-int EmitHello(const std::filesystem::path& path) {
-    Module module("demo.hello");
-    module.version() = SemanticVersion{0, 1, 0};
-    const auto print_symbol = module.AddConstant(Constant::Utf8("tie.std.io.print"));
-    const auto hello = module.AddConstant(Constant::Utf8("Hello, World!"));
-    const auto chinese = module.AddConstant(
-        Constant::Utf8(
-            "\xE4\xBD\xA0\xE5\xA5\xBD\xEF\xBC\x8C"
-            "\xE4\xB8\x96\xE7\x95\x8C\xEF\xBC\x81"));
-
-    auto& fn = module.AddFunction("entry", 6, 0);
-    auto& bb = fn.AddBlock("entry");
-    InstructionBuilder(bb)
-        .LoadK(1, hello)
-        .FfiCall(0, print_symbol, 1)
-        .LoadK(1, chinese)
-        .FfiCall(0, print_symbol, 1)
-        .Ret(0);
-    module.set_entry_function(0);
-
-    auto status = Serializer::SerializeToFile(module, path, true);
-    if (!status.ok()) {
-        std::cerr << "emit hello failed: " << status.message() << "\n";
-        return 2;
-    }
-    std::cout << "wrote " << path.string() << "\n";
-    return 0;
-}
-
-int PrintTlbStruct() {
-    std::cout << "TLB binary layout (little-endian):\n";
-    std::cout << "  header:\n";
-    std::cout << "    magic[4]            = 'TLB0'\n";
-    std::cout << "    version_major(u16)\n";
-    std::cout << "    version_minor(u16)\n";
-    std::cout << "    module_count(u32)\n";
-    std::cout << "  repeated module_count times:\n";
-    std::cout << "    module_name         = string(u32 len + bytes)\n";
-    std::cout << "    semver_major(u32)\n";
-    std::cout << "    semver_minor(u32)\n";
-    std::cout << "    semver_patch(u32)\n";
-    std::cout << "    plugin_count(u32)\n";
-    std::cout << "    native_plugins      = repeated string\n";
-    std::cout << "    bytecode_len(u32)\n";
-    std::cout << "    bytecode_payload    = raw .tbc bytes\n";
-    return 0;
-}
-
-int PrintTbcStruct() {
-    std::cout << "TBC binary layout (little-endian):\n";
-    std::cout << "  header:\n";
-    std::cout << "    magic[4]            = 'TBC0'\n";
-    std::cout << "    format_major(u16)\n";
-    std::cout << "    format_minor(u16)\n";
-    std::cout << "    flags(u32)\n";
-    std::cout << "    module_name         = string(u32 len + bytes)\n";
-    std::cout << "    module_semver       = major/minor/patch (u32 x3)\n";
-    std::cout << "    entry_function(u32)\n";
-    std::cout << "    constant_count(u32)\n";
-    std::cout << "    function_count(u32)\n";
-    std::cout << "  constants:\n";
-    std::cout << "    type(u8) + payload (i64/f64/utf8-string)\n";
-    std::cout << "  functions:\n";
-    std::cout << "    name(string), reg_count(u16), param_count(u16), inst_count(u32)\n";
-    std::cout << "    instructions         = fixed 16 bytes each: opcode(u8), flags(u8),"
-                 " reserved(u16), a(u32), b(u32), c(u32)\n";
-    std::cout << "  optional debug section (when flag enabled):\n";
-    std::cout << "    debug_line_count(u32), entries(function_idx, inst_idx, line, col)\n";
-    return 0;
-}
-
-}  // namespace
-
-int RunTiebc(int argc, char** argv) {
-    if (argc < 2) {
-        return Usage();
-    }
-    const std::string cmd = argv[1];
-    if (cmd == "tlb-struct") {
-        return PrintTlbStruct();
-    }
-    if (cmd == "tbc-struct") {
-        return PrintTbcStruct();
-    }
-    if (argc < 3) {
-        return Usage();
-    }
-    const std::filesystem::path path = argv[2];
-    if (cmd == "check") {
-        return Check(path);
-    }
-    if (cmd == "disasm") {
-        if (path.extension() == ".tlb") {
-            return DisasmTlb(path);
-        }
-        return DisasmTbc(path);
-    }
-    if (cmd == "map") {
-        return DisasmTlb(path);
-    }
-    if (cmd == "build-stdlib") {
-        auto status = BuildStdlibTlb(path);
-        if (!status.ok()) {
-            std::cerr << "build stdlib failed: " << status.message() << "\n";
-            return 2;
-        }
-        std::cout << "wrote " << path.string() << "\n";
-        return 0;
-    }
-    if (cmd == "emit-hello") {
-        return EmitHello(path);
-    }
-    return Usage();
-}
-
 }  // namespace tie::vm::cli
-

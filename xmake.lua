@@ -34,21 +34,38 @@ target("tievm_core")
         set_optimize("faster")
     end
 
+target("tievm_std_native")
+    set_kind("shared")
+    add_includedirs("include")
+    add_files("src/stdlib/native/tievm_std_native.cpp")
+    set_basename("tievm_std_native")
+
 target("tievm")
     set_kind("binary")
     add_includedirs("include")
-    add_files("src/cli/tievm_main.cpp")
-    add_deps("tievm_core")
+    add_files(
+        "src/cli/tievm_main.cpp",
+        "src/cli/tievm_dispatch.cpp",
+        "src/cli/tievm_run_tbc.cpp",
+        "src/cli/tievm_run_tlb.cpp"
+    )
+    add_deps("tievm_core", "tievm_std_native")
 
 target("tiebc")
     set_kind("binary")
     add_includedirs("include")
-    add_files("src/cli/tiebc_main.cpp", "src/cli/tiebc_commands.cpp")
-    add_deps("tievm_core")
+    add_files(
+        "src/cli/tiebc_main.cpp",
+        "src/cli/tiebc_disasm.cpp",
+        "src/cli/tiebc_emit.cpp",
+        "src/cli/tiebc_struct.cpp",
+        "src/cli/tiebc_dispatch.cpp"
+    )
+    add_deps("tievm_core", "tievm_std_native")
 
 target("tievm_tests")
     set_kind("binary")
     add_includedirs("include", "tests")
     add_files("tests/test_main.cpp", "tests/unit/*.cpp", "tests/smoke/*.cpp")
     add_packages("gtest")
-    add_deps("tievm_core")
+    add_deps("tievm_core", "tievm_std_native")

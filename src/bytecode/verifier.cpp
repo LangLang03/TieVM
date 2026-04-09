@@ -1,5 +1,6 @@
 #include "tie/vm/bytecode/verifier.hpp"
 
+#include <unordered_set>
 #include <sstream>
 
 namespace tie::vm {
@@ -25,8 +26,45 @@ VerificationResult Verifier::Verify(const Module& module) {
         return result;
     }
 
+    if (module.ffi_bindings().size() > 0 && module.ffi_signatures().empty()) {
+        result.status = Status::VerificationFailed("ffi bindings exist but signatures are missing");
+        return result;
+    }
+
+    std::unordered_set<std::string> ffi_symbol_names;
+    for (const auto& binding : module.ffi_bindings()) {
+        if (binding.vm_symbol.empty()) {
+            result.status = Status::VerificationFailed("ffi binding vm_symbol is empty");
+            return result;
+        }
+        if (!ffi_symbol_names.insert(binding.vm_symbol).second) {
+            result.status = Status::VerificationFailed("duplicate ffi vm_symbol binding");
+            return result;
+        }
+        if (binding.library_index >= module.ffi_library_paths().size()) {
+            result.status = Status::VerificationFailed("ffi binding library index out of range");
+            return result;
+        }
+        if (binding.signature_index >= module.ffi_signatures().size()) {
+            result.status = Status::VerificationFailed("ffi binding signature index out of range");
+            return result;
+        }
+    }
+
     for (size_t fn_idx = 0; fn_idx < module.functions().size(); ++fn_idx) {
         const auto& function = module.functions()[fn_idx];
+        if (function.ffi_binding().enabled) {
+            if (function.ffi_binding().binding_index >= module.ffi_bindings().size()) {
+                result.status =
+                    Status::VerificationFailed("function ffi binding index out of range");
+                return result;
+            }
+            if (function.ffi_binding().signature_index >= module.ffi_signatures().size()) {
+                result.status =
+                    Status::VerificationFailed("function ffi signature index out of range");
+                return result;
+            }
+        }
         if (function.reg_count() == 0) {
             result.status = Status::VerificationFailed("function has zero register count");
             return result;
@@ -111,6 +149,27 @@ VerificationResult Verifier::Verify(const Module& module) {
                 default:
                     break;
             }
+            if (inst.opcode == OpCode::kFfiCall) {
+                if (!ensure_reg(inst.a)) {
+                    result.status =
+                        Status::VerificationFailed("ffi_call return register out of range");
+                    return result;
+                }
+                if (inst.b >= module.constants().size() ||
+                    module.constants()[inst.b].type != ConstantType::kUtf8) {
+                    result.status =
+                        Status::VerificationFailed("ffi_call requires utf8 symbol constant");
+                    return result;
+                }
+                if (!module.ffi_bindings().empty()) {
+                    const auto& symbol = module.constants()[inst.b].utf8_value;
+                    if (!ffi_symbol_names.contains(symbol)) {
+                        result.status = Status::VerificationFailed(
+                            "ffi_call symbol missing from ffi binding table");
+                        return result;
+                    }
+                }
+            }
             if (IsControlFlow(inst.opcode) && i + 1 < instructions.size()) {
                 result.warnings.emplace_back(
                     "control-flow instruction appears before function end");
@@ -123,4 +182,3 @@ VerificationResult Verifier::Verify(const Module& module) {
 }
 
 }  // namespace tie::vm
-

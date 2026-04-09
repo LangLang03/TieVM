@@ -7,6 +7,7 @@
 
 #include "tie/vm/bytecode/instruction.hpp"
 #include "tie/vm/common/version.hpp"
+#include "tie/vm/ffi/ffi_types.hpp"
 
 namespace tie::vm {
 
@@ -80,12 +81,17 @@ class Function {
     [[nodiscard]] uint16_t param_count() const { return param_count_; }
     [[nodiscard]] const std::vector<BasicBlock>& blocks() const { return blocks_; }
     [[nodiscard]] std::vector<BasicBlock>& blocks() { return blocks_; }
+    [[nodiscard]] const FunctionFfiBindingHeader& ffi_binding() const {
+        return ffi_binding_;
+    }
+    [[nodiscard]] FunctionFfiBindingHeader& ffi_binding() { return ffi_binding_; }
 
   private:
     std::string name_;
     uint16_t reg_count_ = 0;
     uint16_t param_count_ = 0;
     std::vector<BasicBlock> blocks_;
+    FunctionFfiBindingHeader ffi_binding_;
 };
 
 class Module {
@@ -95,6 +101,10 @@ class Module {
     Function& AddFunction(std::string name, uint16_t reg_count, uint16_t param_count);
     uint32_t AddConstant(Constant constant);
     void AddDebugLine(DebugLineEntry entry);
+    uint32_t AddFfiLibraryPath(std::string path);
+    uint32_t AddFfiStruct(FfiStructLayout layout);
+    uint32_t AddFfiSignature(FunctionSignature signature);
+    uint32_t AddFfiBinding(FfiSymbolBinding binding);
 
     [[nodiscard]] const std::string& name() const { return name_; }
     [[nodiscard]] const SemanticVersion& version() const { return version_; }
@@ -105,6 +115,26 @@ class Module {
     [[nodiscard]] const std::vector<DebugLineEntry>& debug_lines() const {
         return debug_lines_;
     }
+    [[nodiscard]] const std::vector<std::string>& ffi_library_paths() const {
+        return ffi_library_paths_;
+    }
+    [[nodiscard]] std::vector<std::string>& ffi_library_paths() {
+        return ffi_library_paths_;
+    }
+    [[nodiscard]] const std::vector<FfiStructLayout>& ffi_structs() const {
+        return ffi_structs_;
+    }
+    [[nodiscard]] std::vector<FfiStructLayout>& ffi_structs() { return ffi_structs_; }
+    [[nodiscard]] const std::vector<FunctionSignature>& ffi_signatures() const {
+        return ffi_signatures_;
+    }
+    [[nodiscard]] std::vector<FunctionSignature>& ffi_signatures() {
+        return ffi_signatures_;
+    }
+    [[nodiscard]] const std::vector<FfiSymbolBinding>& ffi_bindings() const {
+        return ffi_bindings_;
+    }
+    [[nodiscard]] std::vector<FfiSymbolBinding>& ffi_bindings() { return ffi_bindings_; }
     [[nodiscard]] uint32_t entry_function() const { return entry_function_; }
 
     void set_entry_function(uint32_t idx) { entry_function_ = idx; }
@@ -115,8 +145,11 @@ class Module {
     std::vector<Function> functions_;
     std::vector<Constant> constants_;
     std::vector<DebugLineEntry> debug_lines_;
+    std::vector<std::string> ffi_library_paths_;
+    std::vector<FfiStructLayout> ffi_structs_;
+    std::vector<FunctionSignature> ffi_signatures_;
+    std::vector<FfiSymbolBinding> ffi_bindings_;
     uint32_t entry_function_ = 0;
 };
 
 }  // namespace tie::vm
-

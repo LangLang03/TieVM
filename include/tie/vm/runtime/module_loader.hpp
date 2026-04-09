@@ -30,6 +30,7 @@ class ModuleLoader {
 
     Status LoadBytecodeModule(Module module);
     Status LoadTlbFile(const std::filesystem::path& path);
+    Status LoadTlbsFile(const std::filesystem::path& path);
 
     [[nodiscard]] StatusOr<Module> GetModule(const std::string& name) const;
     [[nodiscard]] std::vector<std::string> ActiveModuleNames() const;
@@ -43,7 +44,7 @@ class ModuleLoader {
 
     mutable std::mutex mu_;
     std::unordered_map<std::string, LoadedModule> modules_;
+    std::vector<std::filesystem::path> materialized_bundle_dirs_;
 };
 
 }  // namespace tie::vm
-
