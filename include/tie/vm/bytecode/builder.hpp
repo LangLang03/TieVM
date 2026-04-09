@@ -50,6 +50,11 @@ class InstructionBuilder {
     InstructionBuilder& BitNot(uint32_t dst, uint32_t src);
     InstructionBuilder& BitShl(uint32_t dst, uint32_t lhs, uint32_t rhs);
     InstructionBuilder& BitShr(uint32_t dst, uint32_t lhs, uint32_t rhs);
+    InstructionBuilder& TryBegin(
+        uint32_t catch_target, uint32_t finally_target, uint32_t end_target);
+    InstructionBuilder& TryEnd();
+    InstructionBuilder& EndCatch();
+    InstructionBuilder& EndFinally();
     InstructionBuilder& Call(uint32_t ret_reg, uint32_t function_index, uint32_t arg_count);
     InstructionBuilder& FfiCall(uint32_t ret_reg, uint32_t symbol_index, uint32_t arg_count);
     InstructionBuilder& NewObject(uint32_t dst, uint32_t class_name_constant);

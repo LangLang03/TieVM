@@ -2,8 +2,10 @@
 
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <utility>
 
+#include "tie/vm/runtime/vm_exception.hpp"
 #include "tie/vm/runtime/vm_thread.hpp"
 
 namespace tie::vm {
@@ -15,10 +17,30 @@ VmInstance::VmInstance()
 }
 
 StatusOr<Value> VmInstance::ExecuteModule(const Module& module, const std::vector<Value>& args) {
-    return exception_bridge_.Run([&]() {
-        auto thread = CreateThread();
-        return thread.Execute(module, module.entry_function(), args);
-    });
+    try {
+        thread_local VmInstance* tls_last_instance = nullptr;
+        thread_local VmThread* tls_last_thread = nullptr;
+        thread_local std::unordered_map<VmInstance*, std::unique_ptr<VmThread>> tls_threads;
+        VmThread* thread = nullptr;
+        if (tls_last_instance == this && tls_last_thread != nullptr) {
+            thread = tls_last_thread;
+        } else {
+            auto& thread_slot = tls_threads[this];
+            if (!thread_slot) {
+                thread_slot = std::make_unique<VmThread>(this);
+            }
+            thread = thread_slot.get();
+            tls_last_instance = this;
+            tls_last_thread = thread;
+        }
+        return thread->Execute(module, module.entry_function(), args);
+    } catch (const VmException& ex) {
+        return Status::RuntimeError(ex.error());
+    } catch (const std::exception& ex) {
+        return Status::RuntimeError(ex.what());
+    } catch (...) {
+        return Status::RuntimeError("unknown vm exception");
+    }
 }
 
 StatusOr<Value> VmInstance::ExecuteLoadedModule(

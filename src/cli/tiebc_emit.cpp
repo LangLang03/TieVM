@@ -138,6 +138,108 @@ int EmitOpset(const std::filesystem::path& path) {
     return 0;
 }
 
+int EmitClosureUpvalue(const std::filesystem::path& path) {
+    Module module("demo.closure_upvalue");
+    module.version() = SemanticVersion{0, 1, 0};
+    const auto c_40 = module.AddConstant(Constant::Int64(40));
+    const auto c_1 = module.AddConstant(Constant::Int64(1));
+
+    auto& closure_step = module.AddFunction("closure_step", 4, 1, 1, false);
+    auto& closure_step_bb = closure_step.AddBlock("entry");
+    InstructionBuilder(closure_step_bb)
+        .GetUpval(1, 0)
+        .Add(0, 0, 1)
+        .SetUpval(0, 0)
+        .Ret(0);
+
+    auto& entry = module.AddFunction("entry", 8, 0);
+    auto& entry_bb = entry.AddBlock("entry");
+    InstructionBuilder(entry_bb)
+        .LoadK(1, c_40)
+        .Closure(0, 0, 1, 1)
+        .LoadK(2, c_1)
+        .CallClosure(1, 0, 1)
+        .LoadK(2, c_1)
+        .CallClosure(1, 0, 1)
+        .Ret(1);
+    module.set_entry_function(1);
+
+    auto status = Serializer::SerializeToFile(module, path, true);
+    if (!status.ok()) {
+        std::cerr << "emit closure_upvalue failed: " << status.message() << "\n";
+        return 2;
+    }
+    std::cout << "wrote " << path.string() << "\n";
+    return 0;
+}
+
+int EmitFib(const std::filesystem::path& path, int64_t n) {
+    Module module("demo.fib");
+    module.version() = SemanticVersion{0, 1, 0};
+    const auto c_zero = module.AddConstant(Constant::Int64(0));
+    const auto c_one = module.AddConstant(Constant::Int64(1));
+    const auto c_n = module.AddConstant(Constant::Int64(n));
+
+    auto& entry = module.AddFunction("entry", 8, 0);
+    auto& bb = entry.AddBlock("entry");
+    InstructionBuilder(bb)
+        .LoadK(1, c_zero)      // a = 0
+        .LoadK(2, c_one)       // b = 1
+        .LoadK(3, c_n)         // counter = n
+        .JmpIfZero(3, 10)      // n == 0 => return a
+        .LoadK(4, c_one)       // const 1
+        .CmpEq(5, 3, 4)        // n == 1 ?
+        .JmpIf(5, 6)           // yes => return b
+        .SubImm(3, 3, 1)       // counter = n - 1
+        .Add(4, 1, 2)          // t = a + b
+        .Mov(1, 2)             // a = b
+        .Mov(2, 4)             // b = t
+        .DecJnz(3, -3)         // repeat until counter == 0
+        .Ret(2)                // fib(n)
+        .Ret(1);               // fib(0)
+    module.set_entry_function(0);
+
+    auto status = Serializer::SerializeToFile(module, path, true);
+    if (!status.ok()) {
+        std::cerr << "emit fib failed: " << status.message() << "\n";
+        return 2;
+    }
+    std::cout << "wrote " << path.string() << "\n";
+    return 0;
+}
+
+int EmitErrorHandling(const std::filesystem::path& path) {
+    Module module("demo.error_handling");
+    module.version() = SemanticVersion{0, 1, 0};
+    const auto c_zero = module.AddConstant(Constant::Int64(0));
+    const auto c_one = module.AddConstant(Constant::Int64(1));
+
+    auto& entry = module.AddFunction("entry", 8, 0);
+    auto& bb = entry.AddBlock("entry");
+    InstructionBuilder(bb)
+        .LoadK(1, c_one)
+        .LoadK(2, c_zero)
+        .TryBegin(6, 8, 11)
+        .Div(3, 1, 2)
+        .LoadK(0, c_zero)
+        .TryEnd()
+        .LoadK(0, c_one)
+        .EndCatch()
+        .LoadK(4, c_one)
+        .Add(0, 0, 4)
+        .EndFinally()
+        .Ret(0);
+    module.set_entry_function(0);
+
+    auto status = Serializer::SerializeToFile(module, path, true);
+    if (!status.ok()) {
+        std::cerr << "emit error_handling failed: " << status.message() << "\n";
+        return 2;
+    }
+    std::cout << "wrote " << path.string() << "\n";
+    return 0;
+}
+
 int EmitOopOk(const std::filesystem::path& path) {
     Module module("demo.oop_ok");
     module.version() = SemanticVersion{0, 1, 0};

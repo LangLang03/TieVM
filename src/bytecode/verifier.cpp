@@ -7,13 +7,17 @@ namespace tie::vm {
 
 namespace {
 
+constexpr uint32_t kInvalidTryTarget = 0xFFFFFFFFu;
+
 bool IsControlFlow(OpCode opcode) {
     return opcode == OpCode::kJmp || opcode == OpCode::kJmpIf || opcode == OpCode::kRet ||
            opcode == OpCode::kThrow || opcode == OpCode::kHalt ||
            opcode == OpCode::kJmpIfZero || opcode == OpCode::kJmpIfNotZero ||
            opcode == OpCode::kDecJnz || opcode == OpCode::kAddDecJnz ||
            opcode == OpCode::kSubImmJnz || opcode == OpCode::kAddImmJnz ||
-           opcode == OpCode::kTailCall || opcode == OpCode::kTailCallClosure;
+           opcode == OpCode::kTailCall || opcode == OpCode::kTailCallClosure ||
+           opcode == OpCode::kTryEnd || opcode == OpCode::kEndCatch ||
+           opcode == OpCode::kEndFinally;
 }
 
 }  // namespace
@@ -135,6 +139,10 @@ VerificationResult Verifier::Verify(const Module& module) {
                 const uint64_t max_reg =
                     static_cast<uint64_t>(base_reg) + static_cast<uint64_t>(arg_count);
                 return max_reg < function.reg_count();
+            };
+            auto ensure_try_target = [&](uint32_t target) -> bool {
+                return target == kInvalidTryTarget ||
+                       target < static_cast<uint32_t>(instructions.size());
             };
             switch (inst.opcode) {
                 case OpCode::kMov:
@@ -398,6 +406,28 @@ VerificationResult Verifier::Verify(const Module& module) {
                             "invoke requires valid object register, args and utf8 method constant");
                         return result;
                     }
+                    break;
+                case OpCode::kTryBegin:
+                    if (!ensure_try_target(inst.a) || !ensure_try_target(inst.b) ||
+                        !ensure_try_target(inst.c)) {
+                        result.status =
+                            Status::VerificationFailed("try_begin target out of range");
+                        return result;
+                    }
+                    if (inst.a == kInvalidTryTarget && inst.b == kInvalidTryTarget) {
+                        result.status = Status::VerificationFailed(
+                            "try_begin requires catch or finally target");
+                        return result;
+                    }
+                    if (inst.c == kInvalidTryTarget) {
+                        result.status = Status::VerificationFailed(
+                            "try_begin requires end target");
+                        return result;
+                    }
+                    break;
+                case OpCode::kTryEnd:
+                case OpCode::kEndCatch:
+                case OpCode::kEndFinally:
                     break;
                 default:
                     break;

@@ -48,6 +48,10 @@ enum class OpCode : uint8_t {
     kBitNot = 39,
     kBitShl = 40,
     kBitShr = 41,
+    kTryBegin = 42,
+    kTryEnd = 43,
+    kEndCatch = 44,
+    kEndFinally = 45,
 };
 
 [[nodiscard]] std::string_view OpCodeName(OpCode opcode);

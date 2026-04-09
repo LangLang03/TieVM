@@ -1,6 +1,7 @@
 #include "tie/vm/runtime/vm_thread.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -18,6 +19,7 @@ uint64_t DebugLineKey(uint32_t function_index, uint32_t instruction_index) {
 }
 
 int32_t SignedU32(uint32_t value) { return static_cast<int32_t>(value); }
+constexpr uint32_t kInvalidTryTarget = 0xFFFFFFFFu;
 
 }  // namespace
 
@@ -26,10 +28,25 @@ StatusOr<Value> VmThread::Execute(
     if (entry_function >= module.functions().size()) {
         return Status::InvalidArgument("entry function index out of range");
     }
-    InstructionCache instruction_cache;
-    instruction_cache.reserve(module.functions().size());
+    const size_t execution_index = active_execution_count_++;
+    if (execution_scratch_pool_.size() <= execution_index) {
+        execution_scratch_pool_.resize(execution_index + 1);
+    }
+    auto& scratch = execution_scratch_pool_[execution_index];
+    struct ExecutionDepthGuard {
+        size_t* active_count = nullptr;
+        ~ExecutionDepthGuard() {
+            if (active_count != nullptr) {
+                --(*active_count);
+            }
+        }
+    } depth_guard{&active_execution_count_};
 
-    DebugLineMap debug_line_map;
+    scratch.instruction_cache.clear();
+    scratch.instruction_cache.reserve(module.functions().size());
+
+    auto& debug_line_map = scratch.debug_line_map;
+    debug_line_map.clear();
     if (!module.debug_lines().empty()) {
         debug_line_map.reserve(module.debug_lines().size());
         for (const auto& line : module.debug_lines()) {
@@ -40,13 +57,12 @@ StatusOr<Value> VmThread::Execute(
     }
     closures_.clear();
     next_closure_id_ = 1;
-    return ExecuteFunction(
-        module, entry_function, args, instruction_cache, debug_line_map, nullptr);
+    return ExecuteFunction(module, entry_function, args, scratch, 0, nullptr);
 }
 
 StatusOr<Value> VmThread::ExecuteFunction(
     const Module& module, uint32_t function_index, const std::vector<Value>& args,
-    InstructionCache& instruction_cache, const DebugLineMap& debug_line_map,
+    ExecutionScratch& scratch, size_t frame_depth,
     ClosureRef closure_ref) {
     if (function_index >= module.functions().size()) {
         return Status::InvalidArgument("function index out of range");
@@ -60,22 +76,36 @@ StatusOr<Value> VmThread::ExecuteFunction(
         return Status::InvalidArgument("vararg function argument count mismatch");
     }
 
-    std::vector<Value> regs(function.reg_count(), Value::Null());
+    if (scratch.frames.size() <= frame_depth) {
+        scratch.frames.resize(frame_depth + 1);
+    }
+    auto& frame = scratch.frames[frame_depth];
+    auto& regs = frame.regs;
+    if (regs.size() != function.reg_count()) {
+        regs.resize(function.reg_count());
+    }
+    std::fill(regs.begin(), regs.end(), Value::Null());
     if (!args.empty()) {
         const size_t count = std::min(args.size(), regs.size());
         std::copy_n(args.begin(), count, regs.begin());
     }
 
-    std::vector<Value> varargs;
+    auto& varargs = frame.varargs;
+    varargs.clear();
     if (function.is_vararg() && args.size() > function.param_count()) {
+        const size_t count = args.size() - function.param_count();
+        if (varargs.capacity() < count) {
+            varargs.reserve(count);
+        }
         varargs.insert(
             varargs.end(), args.begin() + function.param_count(), args.end());
     }
 
-    auto code_it = instruction_cache.find(function_index);
-    if (code_it == instruction_cache.end()) {
-        code_it =
-            instruction_cache.emplace(function_index, function.FlattenedInstructions()).first;
+    auto code_it = scratch.instruction_cache.find(function_index);
+    if (code_it == scratch.instruction_cache.end()) {
+        code_it = scratch.instruction_cache.emplace(
+                                     function_index, function.FlattenedInstructions())
+                      .first;
     }
     const auto& code = code_it->second;
     if (code.empty()) {
@@ -89,17 +119,27 @@ StatusOr<Value> VmThread::ExecuteFunction(
         frame.module_name = module.name();
         frame.function_name = function.name();
         frame.program_counter = frame_pc;
-        const auto it = debug_line_map.find(DebugLineKey(function_index, frame_pc));
-        if (it != debug_line_map.end()) {
+        const auto it = scratch.debug_line_map.find(DebugLineKey(function_index, frame_pc));
+        if (it != scratch.debug_line_map.end()) {
             frame.line = it->second.first;
             frame.column = it->second.second;
         }
         return frame;
     };
 
-    std::vector<Value> call_args;
-    std::vector<Value> ffi_args;
-    std::vector<Value> method_args;
+    auto& call_args = frame.call_args;
+    auto& ffi_args = frame.ffi_args;
+    auto& method_args = frame.method_args;
+    struct TryFrame {
+        uint32_t catch_target = kInvalidTryTarget;
+        uint32_t finally_target = kInvalidTryTarget;
+        uint32_t end_target = kInvalidTryTarget;
+        bool in_catch = false;
+        bool in_finally = false;
+        bool rethrow_after_finally = false;
+        std::optional<VmError> pending_exception;
+    };
+    std::vector<TryFrame> try_stack;
 
     auto resolve_closure = [&](const Value& value) -> ClosureRef {
         if (value.type() != Value::Type::kClosure) {
@@ -130,7 +170,8 @@ StatusOr<Value> VmThread::ExecuteFunction(
                 return regs[idx];
             };
 
-            switch (inst.opcode) {
+            try {
+                switch (inst.opcode) {
                 case OpCode::kNop:
                     ++pc;
                     break;
@@ -410,6 +451,76 @@ StatusOr<Value> VmThread::ExecuteFunction(
                     }
                     break;
                 }
+                case OpCode::kTryBegin: {
+                    auto is_valid_try_target = [&](uint32_t target) -> bool {
+                        return target == kInvalidTryTarget ||
+                               target < static_cast<uint32_t>(code.size());
+                    };
+                    if (!is_valid_try_target(inst.a) || !is_valid_try_target(inst.b) ||
+                        !is_valid_try_target(inst.c) || inst.c == kInvalidTryTarget) {
+                        throw VmException("try_begin target out of range");
+                    }
+                    try_stack.push_back(TryFrame{
+                        inst.a,
+                        inst.b,
+                        inst.c,
+                        false,
+                        false,
+                        false,
+                        std::nullopt,
+                    });
+                    ++pc;
+                    break;
+                }
+                case OpCode::kTryEnd: {
+                    if (try_stack.empty()) {
+                        throw VmException("try_end without active try frame");
+                    }
+                    auto& current_try = try_stack.back();
+                    if (current_try.finally_target != kInvalidTryTarget) {
+                        current_try.in_catch = false;
+                        current_try.in_finally = true;
+                        current_try.rethrow_after_finally = false;
+                        current_try.pending_exception.reset();
+                        pc = static_cast<int64_t>(current_try.finally_target);
+                    } else {
+                        const uint32_t end_target = current_try.end_target;
+                        try_stack.pop_back();
+                        pc = static_cast<int64_t>(end_target);
+                    }
+                    break;
+                }
+                case OpCode::kEndCatch: {
+                    if (try_stack.empty()) {
+                        throw VmException("end_catch without active try frame");
+                    }
+                    auto& current_try = try_stack.back();
+                    if (current_try.finally_target != kInvalidTryTarget) {
+                        current_try.in_catch = false;
+                        current_try.in_finally = true;
+                        current_try.rethrow_after_finally = false;
+                        current_try.pending_exception.reset();
+                        pc = static_cast<int64_t>(current_try.finally_target);
+                    } else {
+                        const uint32_t end_target = current_try.end_target;
+                        try_stack.pop_back();
+                        pc = static_cast<int64_t>(end_target);
+                    }
+                    break;
+                }
+                case OpCode::kEndFinally: {
+                    if (try_stack.empty()) {
+                        throw VmException("end_finally without active try frame");
+                    }
+                    auto completed_try = std::move(try_stack.back());
+                    try_stack.pop_back();
+                    if (completed_try.rethrow_after_finally &&
+                        completed_try.pending_exception.has_value()) {
+                        throw VmException(*completed_try.pending_exception);
+                    }
+                    pc = static_cast<int64_t>(completed_try.end_target);
+                    break;
+                }
                 case OpCode::kClosure: {
                     if (inst.b >= module.functions().size()) {
                         throw VmException("closure function index out of range");
@@ -463,15 +574,12 @@ StatusOr<Value> VmThread::ExecuteFunction(
                     break;
                 }
                 case OpCode::kCall: {
-                    call_args.clear();
-                    if (call_args.capacity() < inst.c) {
-                        call_args.reserve(inst.c);
-                    }
+                    call_args.resize(inst.c);
                     for (uint32_t i = 0; i < inst.c; ++i) {
-                        call_args.push_back(reg_const(inst.a + 1 + i));
+                        call_args[i] = reg_const(inst.a + 1 + i);
                     }
                     auto result_or = ExecuteFunction(
-                        module, inst.b, call_args, instruction_cache, debug_line_map, nullptr);
+                        module, inst.b, call_args, scratch, frame_depth + 1, nullptr);
                     if (!result_or.ok()) {
                         return result_or.status().WithFrame(
                             vm_frame_for_pc(static_cast<uint32_t>(pc)));
@@ -482,19 +590,16 @@ StatusOr<Value> VmThread::ExecuteFunction(
                 }
                 case OpCode::kCallClosure: {
                     auto closure = resolve_closure(reg_const(inst.b));
-                    call_args.clear();
-                    if (call_args.capacity() < inst.c) {
-                        call_args.reserve(inst.c);
-                    }
+                    call_args.resize(inst.c);
                     for (uint32_t i = 0; i < inst.c; ++i) {
-                        call_args.push_back(reg_const(inst.a + 1 + i));
+                        call_args[i] = reg_const(inst.a + 1 + i);
                     }
                     auto result_or = ExecuteFunction(
                         module,
                         closure->function_index,
                         call_args,
-                        instruction_cache,
-                        debug_line_map,
+                        scratch,
+                        frame_depth + 1,
                         closure);
                     if (!result_or.ok()) {
                         return result_or.status().WithFrame(
@@ -505,15 +610,12 @@ StatusOr<Value> VmThread::ExecuteFunction(
                     break;
                 }
                 case OpCode::kTailCall: {
-                    call_args.clear();
-                    if (call_args.capacity() < inst.c) {
-                        call_args.reserve(inst.c);
-                    }
+                    call_args.resize(inst.c);
                     for (uint32_t i = 0; i < inst.c; ++i) {
-                        call_args.push_back(reg_const(inst.a + 1 + i));
+                        call_args[i] = reg_const(inst.a + 1 + i);
                     }
                     auto result_or = ExecuteFunction(
-                        module, inst.b, call_args, instruction_cache, debug_line_map, nullptr);
+                        module, inst.b, call_args, scratch, frame_depth + 1, nullptr);
                     if (!result_or.ok()) {
                         return result_or.status().WithFrame(
                             vm_frame_for_pc(static_cast<uint32_t>(pc)));
@@ -522,19 +624,16 @@ StatusOr<Value> VmThread::ExecuteFunction(
                 }
                 case OpCode::kTailCallClosure: {
                     auto closure = resolve_closure(reg_const(inst.b));
-                    call_args.clear();
-                    if (call_args.capacity() < inst.c) {
-                        call_args.reserve(inst.c);
-                    }
+                    call_args.resize(inst.c);
                     for (uint32_t i = 0; i < inst.c; ++i) {
-                        call_args.push_back(reg_const(inst.a + 1 + i));
+                        call_args[i] = reg_const(inst.a + 1 + i);
                     }
                     auto result_or = ExecuteFunction(
                         module,
                         closure->function_index,
                         call_args,
-                        instruction_cache,
-                        debug_line_map,
+                        scratch,
+                        frame_depth + 1,
                         closure);
                     if (!result_or.ok()) {
                         return result_or.status().WithFrame(
@@ -548,12 +647,9 @@ StatusOr<Value> VmThread::ExecuteFunction(
                         throw VmException("ffi_call requires utf8 symbol constant");
                     }
                     const auto& symbol = module.constants()[inst.b].utf8_value;
-                    ffi_args.clear();
-                    if (ffi_args.capacity() < inst.c) {
-                        ffi_args.reserve(inst.c);
-                    }
+                    ffi_args.resize(inst.c);
                     for (uint32_t i = 0; i < inst.c; ++i) {
-                        ffi_args.push_back(reg_const(inst.a + 1 + i));
+                        ffi_args[i] = reg_const(inst.a + 1 + i);
                     }
                     auto ffi_or = owner_->ffi().CallBoundFunction(
                         module, function_index, symbol, *this, ffi_args);
@@ -600,12 +696,9 @@ StatusOr<Value> VmThread::ExecuteFunction(
                     }
                     const auto& method_name = module.constants()[inst.b].utf8_value;
                     ObjectId object_id = reg_const(inst.a).AsObject();
-                    method_args.clear();
-                    if (method_args.capacity() < inst.c) {
-                        method_args.reserve(inst.c);
-                    }
+                    method_args.resize(inst.c);
                     for (uint32_t i = 0; i < inst.c; ++i) {
-                        method_args.push_back(reg_const(inst.a + 1 + i));
+                        method_args[i] = reg_const(inst.a + 1 + i);
                     }
                     auto result_or =
                         owner_->reflection().Invoke(object_id, method_name, method_args);
@@ -619,6 +712,40 @@ StatusOr<Value> VmThread::ExecuteFunction(
                 }
                 default:
                     throw VmException("unknown opcode");
+                }
+            } catch (VmException& ex) {
+                bool handled = false;
+                while (!try_stack.empty()) {
+                    auto& current_try = try_stack.back();
+                    if (current_try.in_finally) {
+                        try_stack.pop_back();
+                        continue;
+                    }
+                    if (!current_try.in_catch &&
+                        current_try.catch_target != kInvalidTryTarget) {
+                        current_try.in_catch = true;
+                        current_try.pending_exception = ex.error();
+                        current_try.rethrow_after_finally = false;
+                        pc = static_cast<int64_t>(current_try.catch_target);
+                        handled = true;
+                        break;
+                    }
+                    if (current_try.finally_target != kInvalidTryTarget) {
+                        current_try.in_catch = false;
+                        current_try.in_finally = true;
+                        current_try.pending_exception = ex.error();
+                        current_try.rethrow_after_finally = true;
+                        pc = static_cast<int64_t>(current_try.finally_target);
+                        handled = true;
+                        break;
+                    }
+                    try_stack.pop_back();
+                }
+                if (handled) {
+                    continue;
+                }
+                ex.PushFrame(vm_frame_for_pc(static_cast<uint32_t>(pc)));
+                throw;
             }
         }
     } catch (VmException& ex) {

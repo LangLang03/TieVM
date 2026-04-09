@@ -195,6 +195,27 @@ InstructionBuilder& InstructionBuilder::BitShr(uint32_t dst, uint32_t lhs, uint3
     return *this;
 }
 
+InstructionBuilder& InstructionBuilder::TryBegin(
+    uint32_t catch_target, uint32_t finally_target, uint32_t end_target) {
+    block_->Append(MakeInstruction(OpCode::kTryBegin, catch_target, finally_target, end_target));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::TryEnd() {
+    block_->Append(MakeInstruction(OpCode::kTryEnd, 0, 0, 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::EndCatch() {
+    block_->Append(MakeInstruction(OpCode::kEndCatch, 0, 0, 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::EndFinally() {
+    block_->Append(MakeInstruction(OpCode::kEndFinally, 0, 0, 0));
+    return *this;
+}
+
 InstructionBuilder& InstructionBuilder::Call(
     uint32_t ret_reg, uint32_t function_index, uint32_t arg_count) {
     block_->Append(MakeInstruction(OpCode::kCall, ret_reg, function_index, arg_count));

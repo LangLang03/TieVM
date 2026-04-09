@@ -253,6 +253,19 @@ std::string FormatInstruction(
         case OpCode::kBitShr:
             out << Reg(inst.a) << " <- " << Reg(inst.b) << " >> " << Reg(inst.c);
             break;
+        case OpCode::kTryBegin:
+            out << "try_begin catch=#" << inst.a << " finally=#" << inst.b << " end=#"
+                << inst.c;
+            break;
+        case OpCode::kTryEnd:
+            out << "try_end";
+            break;
+        case OpCode::kEndCatch:
+            out << "end_catch";
+            break;
+        case OpCode::kEndFinally:
+            out << "end_finally";
+            break;
         case OpCode::kCall:
             out << Reg(inst.a) << " <- call func[" << inst.b << "] "
                 << FunctionNameOrFallback(module, inst.b) << FormatArgs(inst.a, inst.c);

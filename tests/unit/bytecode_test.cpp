@@ -328,6 +328,33 @@ TEST(BytecodeTest, RuntimeValidationRejectsInvalidRegisterAccess) {
     EXPECT_FALSE(result_or.ok());
 }
 
+TEST(BytecodeTest, TryCatchFinallyHandlesThrowAndExecutesFinally) {
+    Module module("try.catch.finally");
+    const auto c_zero = module.AddConstant(Constant::Int64(0));
+    const auto c_one = module.AddConstant(Constant::Int64(1));
+    auto& fn = module.AddFunction("entry", 8, 0);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb)
+        .LoadK(1, c_one)
+        .LoadK(2, c_zero)
+        .TryBegin(6, 8, 11)
+        .Div(3, 1, 2)
+        .LoadK(0, c_zero)
+        .TryEnd()
+        .LoadK(0, c_one)
+        .EndCatch()
+        .LoadK(4, c_one)
+        .Add(0, 0, 4)
+        .EndFinally()
+        .Ret(0);
+    module.set_entry_function(0);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 2);
+}
+
 TEST(BytecodeTest, SerializeDeserializeFfiMetadataRoundTrip) {
     Module module("ffi.meta");
     const auto symbol = module.AddConstant(Constant::Utf8("demo.add"));

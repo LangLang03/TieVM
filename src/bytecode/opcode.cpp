@@ -88,6 +88,14 @@ std::string_view OpCodeName(OpCode opcode) {
             return "bit_shl";
         case OpCode::kBitShr:
             return "bit_shr";
+        case OpCode::kTryBegin:
+            return "try_begin";
+        case OpCode::kTryEnd:
+            return "try_end";
+        case OpCode::kEndCatch:
+            return "end_catch";
+        case OpCode::kEndFinally:
+            return "end_finally";
     }
     return "unknown";
 }

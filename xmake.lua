@@ -92,8 +92,13 @@ target("tiebc")
 
 target("tievm_tests")
     set_kind("binary")
-    add_includedirs("include", "tests")
-    add_files("tests/test_main.cpp", "tests/unit/*.cpp", "tests/smoke/*.cpp")
+    add_includedirs("include", "tests", "src/cli")
+    add_files(
+        "tests/test_main.cpp",
+        "tests/unit/*.cpp",
+        "tests/smoke/*.cpp",
+        "src/cli/tiebc_emit.cpp"
+    )
     add_packages("gtest")
     add_deps("tievm_core", "tievm_std_native")
 
