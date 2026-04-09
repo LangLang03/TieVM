@@ -1,6 +1,8 @@
 #include <chrono>
+#include <cctype>
 #include <cstring>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -65,6 +67,119 @@ bool IsIpv4(const char* text) {
     return count == 4;
 }
 
+bool IsIpv6(const char* text) {
+    if (text == nullptr) {
+        return false;
+    }
+    std::string s(text);
+    if (s.empty()) {
+        return false;
+    }
+    int groups = 0;
+    bool compressed = false;
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] == ':') {
+            if (i + 1 < s.size() && s[i + 1] == ':') {
+                if (compressed) {
+                    return false;
+                }
+                compressed = true;
+                i += 2;
+                ++groups;
+                continue;
+            }
+            return false;
+        }
+        size_t j = i;
+        while (j < s.size() && s[j] != ':') {
+            const char ch = s[j];
+            const bool hex = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') ||
+                             (ch >= 'A' && ch <= 'F');
+            if (!hex) {
+                return false;
+            }
+            ++j;
+        }
+        const size_t len = j - i;
+        if (len == 0 || len > 4) {
+            return false;
+        }
+        ++groups;
+        if (j >= s.size()) {
+            i = j;
+            break;
+        }
+        i = j + 1;
+    }
+    if (compressed) {
+        return groups <= 8;
+    }
+    return groups == 8;
+}
+
+bool StartsWith(const std::string& text, const std::string& prefix) {
+    if (prefix.size() > text.size()) {
+        return false;
+    }
+    return std::equal(prefix.begin(), prefix.end(), text.begin());
+}
+
+bool EndsWith(const std::string& text, const std::string& suffix) {
+    if (suffix.size() > text.size()) {
+        return false;
+    }
+    return std::equal(suffix.rbegin(), suffix.rend(), text.rbegin());
+}
+
+std::string ToLowerAscii(std::string text) {
+    for (char& ch : text) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return text;
+}
+
+std::string ToUpperAscii(std::string text) {
+    for (char& ch : text) {
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    }
+    return text;
+}
+
+int64_t PowInt64(int64_t base, int64_t exp) {
+    if (exp < 0) {
+        return 0;
+    }
+    int64_t result = 1;
+    int64_t b = base;
+    int64_t e = exp;
+    while (e > 0) {
+        if ((e & 1) != 0) {
+            result *= b;
+        }
+        e >>= 1;
+        if (e > 0) {
+            b *= b;
+        }
+    }
+    return result;
+}
+
+int64_t GcdInt64(int64_t a, int64_t b) {
+    if (a < 0) {
+        a = -a;
+    }
+    if (b < 0) {
+        b = -b;
+    }
+    while (b != 0) {
+        const int64_t t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
+}
+
 }  // namespace
 
 TIEVM_STD_EXPORT void tie_std_io_print(const char* text) {
@@ -100,6 +215,25 @@ TIEVM_STD_EXPORT bool tie_std_io_write_text(const char* path, const char* text) 
     return out.good();
 }
 
+TIEVM_STD_EXPORT bool tie_std_io_exists(const char* path) {
+    if (path == nullptr) {
+        return false;
+    }
+    return std::filesystem::exists(std::filesystem::path(path));
+}
+
+TIEVM_STD_EXPORT bool tie_std_io_append_text(const char* path, const char* text) {
+    if (path == nullptr || text == nullptr) {
+        return false;
+    }
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    if (!out.is_open()) {
+        return false;
+    }
+    out.write(text, static_cast<std::streamsize>(std::strlen(text)));
+    return out.good();
+}
+
 TIEVM_STD_EXPORT uint64_t tie_std_collections_array_new() {
     auto* array = new TieArray();
     return reinterpret_cast<uint64_t>(array);
@@ -128,6 +262,25 @@ TIEVM_STD_EXPORT int64_t tie_std_collections_array_size(uint64_t array_handle) {
         return 0;
     }
     return static_cast<int64_t>(array->data.size());
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_collections_array_pop(uint64_t array_handle) {
+    auto* array = reinterpret_cast<TieArray*>(array_handle);
+    if (array == nullptr || array->data.empty()) {
+        return 0;
+    }
+    const int64_t value = array->data.back();
+    array->data.pop_back();
+    return value;
+}
+
+TIEVM_STD_EXPORT bool tie_std_collections_array_clear(uint64_t array_handle) {
+    auto* array = reinterpret_cast<TieArray*>(array_handle);
+    if (array == nullptr) {
+        return false;
+    }
+    array->data.clear();
+    return true;
 }
 
 TIEVM_STD_EXPORT bool tie_std_collections_array_free(uint64_t array_handle) {
@@ -172,6 +325,31 @@ TIEVM_STD_EXPORT bool tie_std_collections_map_has(uint64_t map_handle, const cha
         return false;
     }
     return map->data.contains(std::string(key));
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_collections_map_size(uint64_t map_handle) {
+    auto* map = reinterpret_cast<TieMap*>(map_handle);
+    if (map == nullptr) {
+        return 0;
+    }
+    return static_cast<int64_t>(map->data.size());
+}
+
+TIEVM_STD_EXPORT bool tie_std_collections_map_remove(uint64_t map_handle, const char* key) {
+    auto* map = reinterpret_cast<TieMap*>(map_handle);
+    if (map == nullptr || key == nullptr) {
+        return false;
+    }
+    return map->data.erase(std::string(key)) > 0;
+}
+
+TIEVM_STD_EXPORT bool tie_std_collections_map_clear(uint64_t map_handle) {
+    auto* map = reinterpret_cast<TieMap*>(map_handle);
+    if (map == nullptr) {
+        return false;
+    }
+    map->data.clear();
+    return true;
 }
 
 TIEVM_STD_EXPORT bool tie_std_collections_map_free(uint64_t map_handle) {
@@ -260,6 +438,59 @@ TIEVM_STD_EXPORT const char* tie_std_string_slice(const char* text, int64_t star
     return g_tievm_std_tls_text.c_str();
 }
 
+TIEVM_STD_EXPORT bool tie_std_string_starts_with(const char* text, const char* prefix) {
+    return StartsWith(
+        text == nullptr ? std::string() : std::string(text),
+        prefix == nullptr ? std::string() : std::string(prefix));
+}
+
+TIEVM_STD_EXPORT bool tie_std_string_ends_with(const char* text, const char* suffix) {
+    return EndsWith(
+        text == nullptr ? std::string() : std::string(text),
+        suffix == nullptr ? std::string() : std::string(suffix));
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_string_find(const char* text, const char* needle) {
+    if (text == nullptr || needle == nullptr) {
+        return -1;
+    }
+    const std::string haystack(text);
+    const std::string target(needle);
+    const size_t index = haystack.find(target);
+    if (index == std::string::npos) {
+        return -1;
+    }
+    return static_cast<int64_t>(index);
+}
+
+TIEVM_STD_EXPORT const char* tie_std_string_replace(
+    const char* text, const char* from, const char* to) {
+    const std::string source = text == nullptr ? "" : std::string(text);
+    const std::string from_s = from == nullptr ? "" : std::string(from);
+    const std::string to_s = to == nullptr ? "" : std::string(to);
+    if (from_s.empty()) {
+        g_tievm_std_tls_text = source;
+        return g_tievm_std_tls_text.c_str();
+    }
+    g_tievm_std_tls_text = source;
+    size_t pos = 0;
+    while ((pos = g_tievm_std_tls_text.find(from_s, pos)) != std::string::npos) {
+        g_tievm_std_tls_text.replace(pos, from_s.size(), to_s);
+        pos += to_s.size();
+    }
+    return g_tievm_std_tls_text.c_str();
+}
+
+TIEVM_STD_EXPORT const char* tie_std_string_lower_ascii(const char* text) {
+    g_tievm_std_tls_text = ToLowerAscii(text == nullptr ? std::string() : std::string(text));
+    return g_tievm_std_tls_text.c_str();
+}
+
+TIEVM_STD_EXPORT const char* tie_std_string_upper_ascii(const char* text) {
+    g_tievm_std_tls_text = ToUpperAscii(text == nullptr ? std::string() : std::string(text));
+    return g_tievm_std_tls_text.c_str();
+}
+
 TIEVM_STD_EXPORT void tie_std_concurrent_sleep_ms(int64_t millis) {
     if (millis < 0) {
         return;
@@ -268,6 +499,49 @@ TIEVM_STD_EXPORT void tie_std_concurrent_sleep_ms(int64_t millis) {
 }
 
 TIEVM_STD_EXPORT bool tie_std_net_is_ipv4(const char* text) { return IsIpv4(text); }
+
+TIEVM_STD_EXPORT bool tie_std_net_is_ipv6(const char* text) { return IsIpv6(text); }
+
+TIEVM_STD_EXPORT int64_t tie_std_math_abs(int64_t value) {
+    return value < 0 ? -value : value;
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_math_min(int64_t lhs, int64_t rhs) {
+    return lhs < rhs ? lhs : rhs;
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_math_max(int64_t lhs, int64_t rhs) {
+    return lhs > rhs ? lhs : rhs;
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_math_clamp(int64_t value, int64_t lo, int64_t hi) {
+    if (lo > hi) {
+        const int64_t t = lo;
+        lo = hi;
+        hi = t;
+    }
+    if (value < lo) {
+        return lo;
+    }
+    if (value > hi) {
+        return hi;
+    }
+    return value;
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_math_pow_i(int64_t base, int64_t exp) {
+    return PowInt64(base, exp);
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_math_gcd(int64_t a, int64_t b) {
+    return GcdInt64(a, b);
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_time_now_ms() {
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    return static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+}
 
 TIEVM_STD_EXPORT int32_t tie_demo_add(int32_t lhs, int32_t rhs) { return lhs + rhs; }
 

@@ -170,6 +170,17 @@ std::vector<ExportSpec> IoExports() {
              {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
          },
          {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.io.exists",
+         "tie_std_io_exists",
+         {{AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.io.append_text",
+         "tie_std_io_append_text",
+         {
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
     };
 }
 
@@ -192,6 +203,12 @@ std::vector<ExportSpec> CollectionsExports() {
         {"tie.std.collections.array_size", "tie_std_collections_array_size",
          {{AbiValueKind::kPointer, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
          {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.collections.array_pop", "tie_std_collections_array_pop",
+         {{AbiValueKind::kPointer, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.collections.array_clear", "tie_std_collections_array_clear",
+         {{AbiValueKind::kPointer, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
         {"tie.std.collections.array_free", "tie_std_collections_array_free",
          {{AbiValueKind::kPointer, OwnershipQualifier::kOwned, FfiPassingMode::kValue, 0, 0}},
          {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
@@ -215,6 +232,18 @@ std::vector<ExportSpec> CollectionsExports() {
              {AbiValueKind::kPointer, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
              {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
          },
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.collections.map_size", "tie_std_collections_map_size",
+         {{AbiValueKind::kPointer, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.collections.map_remove", "tie_std_collections_map_remove",
+         {
+             {AbiValueKind::kPointer, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.collections.map_clear", "tie_std_collections_map_clear",
+         {{AbiValueKind::kPointer, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
          {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
         {"tie.std.collections.map_free", "tie_std_collections_map_free",
          {{AbiValueKind::kPointer, OwnershipQualifier::kOwned, FfiPassingMode::kValue, 0, 0}},
@@ -246,6 +275,37 @@ std::vector<ExportSpec> StringExports() {
              {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
          },
          {AbiValueKind::kUtf8, OwnershipQualifier::kOwned, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.string.starts_with", "tie_std_string_starts_with",
+         {
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.string.ends_with", "tie_std_string_ends_with",
+         {
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.string.find", "tie_std_string_find",
+         {
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.string.replace", "tie_std_string_replace",
+         {
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kUtf8, OwnershipQualifier::kOwned, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.string.lower_ascii", "tie_std_string_lower_ascii",
+         {{AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+         {AbiValueKind::kUtf8, OwnershipQualifier::kOwned, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.string.upper_ascii", "tie_std_string_upper_ascii",
+         {{AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+         {AbiValueKind::kUtf8, OwnershipQualifier::kOwned, FfiPassingMode::kValue, 0, 0}},
     };
 }
 
@@ -262,6 +322,55 @@ std::vector<ExportSpec> NetExports() {
         {"tie.std.net.is_ipv4", "tie_std_net_is_ipv4",
          {{AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
          {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.net.is_ipv6", "tie_std_net_is_ipv6",
+         {{AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+    };
+}
+
+std::vector<ExportSpec> MathExports() {
+    return {
+        {"tie.std.math.abs", "tie_std_math_abs",
+         {{AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.math.min", "tie_std_math_min",
+         {
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.math.max", "tie_std_math_max",
+         {
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.math.clamp", "tie_std_math_clamp",
+         {
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.math.pow_i", "tie_std_math_pow_i",
+         {
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.math.gcd", "tie_std_math_gcd",
+         {
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+             {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
+         },
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+    };
+}
+
+std::vector<ExportSpec> TimeExports() {
+    return {
+        {"tie.std.time.now_ms", "tie_std_time_now_ms", {},
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
     };
 }
 
@@ -272,12 +381,14 @@ StatusOr<TlbContainer> BuildStdlibContainer() {
     const std::string library_relative_path =
         "libs/" + CurrentPlatformName() + "/" + CurrentArchName() + "/" +
         NativeStdlibFilename();
-    const std::array<std::pair<std::string, std::vector<ExportSpec>>, 5> modules = {{
+    const std::array<std::pair<std::string, std::vector<ExportSpec>>, 7> modules = {{
         {"tie.std.io", IoExports()},
         {"tie.std.collections", CollectionsExports()},
         {"tie.std.string", StringExports()},
         {"tie.std.concurrent", ConcurrentExports()},
         {"tie.std.net", NetExports()},
+        {"tie.std.math", MathExports()},
+        {"tie.std.time", TimeExports()},
     }};
 
     for (const auto& [name, exports] : modules) {
