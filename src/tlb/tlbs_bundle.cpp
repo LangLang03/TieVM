@@ -5,7 +5,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <sstream>
+
+#include <zlib.h>
 
 namespace tie::vm {
 
@@ -15,7 +18,9 @@ constexpr uint32_t kZipLocalHeader = 0x04034B50u;
 constexpr uint32_t kZipCentralHeader = 0x02014B50u;
 constexpr uint32_t kZipEndHeader = 0x06054B50u;
 constexpr uint16_t kZipStoreMethod = 0;
+constexpr uint16_t kZipDeflateMethod = 8;
 constexpr uint16_t kZipVersion = 20;
+constexpr uint16_t kZipFlagDataDescriptor = 0x0008;
 
 void WriteU16(std::vector<uint8_t>& out, uint16_t value) {
     out.push_back(static_cast<uint8_t>(value & 0xFFu));
@@ -53,29 +58,130 @@ StatusOr<uint32_t> ReadU32(const std::vector<uint8_t>& bytes, size_t* offset) {
     return value;
 }
 
-std::vector<uint32_t> BuildCrc32Table() {
-    std::vector<uint32_t> table(256);
-    for (uint32_t i = 0; i < table.size(); ++i) {
-        uint32_t c = i;
-        for (int j = 0; j < 8; ++j) {
-            if ((c & 1u) != 0u) {
-                c = 0xEDB88320u ^ (c >> 1u);
-            } else {
-                c >>= 1u;
-            }
-        }
-        table[i] = c;
+StatusOr<uInt> ToZlibSize(size_t value, const char* field_name) {
+    if (value > static_cast<size_t>(std::numeric_limits<uInt>::max())) {
+        return Status::SerializationError(
+            std::string("zlib size overflow for ") + field_name);
     }
-    return table;
+    return static_cast<uInt>(value);
 }
 
-uint32_t Crc32(const std::vector<uint8_t>& data) {
-    static const std::vector<uint32_t> table = BuildCrc32Table();
-    uint32_t crc = 0xFFFFFFFFu;
-    for (const auto byte : data) {
-        crc = table[(crc ^ byte) & 0xFFu] ^ (crc >> 8u);
+StatusOr<uint32_t> ToZipSize(size_t value, const char* field_name) {
+    if (value > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+        return Status::SerializationError(
+            std::string("zip size overflow for ") + field_name);
     }
-    return crc ^ 0xFFFFFFFFu;
+    return static_cast<uint32_t>(value);
+}
+
+StatusOr<uint32_t> Crc32(const std::vector<uint8_t>& data) {
+    auto size_or = ToZlibSize(data.size(), "crc32");
+    if (!size_or.ok()) {
+        return size_or.status();
+    }
+    const auto* raw = data.empty() ? Z_NULL : reinterpret_cast<const Bytef*>(data.data());
+    const auto crc = ::crc32(0L, raw, size_or.value());
+    if (crc > static_cast<uLong>(std::numeric_limits<uint32_t>::max())) {
+        return Status::SerializationError("crc32 overflow");
+    }
+    return static_cast<uint32_t>(crc);
+}
+
+StatusOr<std::vector<uint8_t>> DeflateRaw(const std::vector<uint8_t>& data) {
+    auto input_size_or = ToZlibSize(data.size(), "deflate input");
+    if (!input_size_or.ok()) {
+        return input_size_or.status();
+    }
+
+    const auto bound = compressBound(static_cast<uLong>(data.size()));
+    if (bound > static_cast<uLong>(std::numeric_limits<size_t>::max())) {
+        return Status::SerializationError("deflate bound overflow");
+    }
+    std::vector<uint8_t> out(static_cast<size_t>(bound));
+
+    z_stream stream{};
+    const int init = deflateInit2(
+        &stream,
+        Z_BEST_SPEED,
+        Z_DEFLATED,
+        -MAX_WBITS,
+        8,
+        Z_DEFAULT_STRATEGY);
+    if (init != Z_OK) {
+        return Status::SerializationError("deflateInit2 failed");
+    }
+
+    stream.next_in = const_cast<Bytef*>(
+        data.empty() ? Z_NULL : reinterpret_cast<const Bytef*>(data.data()));
+    stream.avail_in = input_size_or.value();
+    stream.next_out = reinterpret_cast<Bytef*>(out.data());
+    auto out_size_or = ToZlibSize(out.size(), "deflate output");
+    if (!out_size_or.ok()) {
+        deflateEnd(&stream);
+        return out_size_or.status();
+    }
+    stream.avail_out = out_size_or.value();
+
+    const int code = deflate(&stream, Z_FINISH);
+    if (code != Z_STREAM_END) {
+        deflateEnd(&stream);
+        return Status::SerializationError("deflate failed");
+    }
+    const int end_code = deflateEnd(&stream);
+    if (end_code != Z_OK) {
+        return Status::SerializationError("deflateEnd failed");
+    }
+
+    out.resize(static_cast<size_t>(stream.total_out));
+    return out;
+}
+
+StatusOr<std::vector<uint8_t>> InflateRaw(
+    const std::vector<uint8_t>& compressed, uint32_t uncompressed_size) {
+    auto input_size_or = ToZlibSize(compressed.size(), "inflate input");
+    if (!input_size_or.ok()) {
+        return input_size_or.status();
+    }
+
+    std::vector<uint8_t> out;
+    if (uncompressed_size == 0) {
+        out.resize(1);
+    } else {
+        out.resize(uncompressed_size);
+    }
+
+    z_stream stream{};
+    const int init = inflateInit2(&stream, -MAX_WBITS);
+    if (init != Z_OK) {
+        return Status::SerializationError("inflateInit2 failed");
+    }
+
+    stream.next_in = const_cast<Bytef*>(
+        compressed.empty() ? Z_NULL : reinterpret_cast<const Bytef*>(compressed.data()));
+    stream.avail_in = input_size_or.value();
+    stream.next_out = reinterpret_cast<Bytef*>(out.data());
+    auto output_size_or = ToZlibSize(out.size(), "inflate output");
+    if (!output_size_or.ok()) {
+        inflateEnd(&stream);
+        return output_size_or.status();
+    }
+    stream.avail_out = output_size_or.value();
+
+    const int code = inflate(&stream, Z_FINISH);
+    if (code != Z_STREAM_END) {
+        inflateEnd(&stream);
+        return Status::SerializationError("inflate failed");
+    }
+    const int end_code = inflateEnd(&stream);
+    if (end_code != Z_OK) {
+        return Status::SerializationError("inflateEnd failed");
+    }
+
+    if (stream.total_out != uncompressed_size) {
+        return Status::SerializationError("inflate size mismatch");
+    }
+    out.resize(uncompressed_size);
+    return out;
 }
 
 std::string Trim(std::string text) {
@@ -119,6 +225,9 @@ std::string RenderManifest(const TlbsManifest& manifest) {
     std::ostringstream out;
     out << "name = \"" << manifest.name << "\"\n";
     out << "version = \"" << manifest.version.ToString() << "\"\n";
+    if (manifest.entry_module.has_value()) {
+        out << "entry_module = \"" << *manifest.entry_module << "\"\n";
+    }
     out << "modules = [";
     for (size_t i = 0; i < manifest.modules.size(); ++i) {
         if (i > 0) {
@@ -185,6 +294,10 @@ StatusOr<TlbsManifest> ParseManifest(const std::string& text) {
             manifest.version = parsed;
             continue;
         }
+        if (key == "entry_module") {
+            manifest.entry_module = Unquote(value);
+            continue;
+        }
         if (key == "modules") {
             if (value.size() < 2 || value.front() != '[' || value.back() != ']') {
                 return Status::SerializationError("manifest modules must be an array");
@@ -205,51 +318,103 @@ StatusOr<TlbsManifest> ParseManifest(const std::string& text) {
     if (manifest.name.empty()) {
         return Status::SerializationError("manifest name is required");
     }
+    if (manifest.entry_module.has_value()) {
+        if (manifest.entry_module->empty()) {
+            return Status::SerializationError("manifest entry_module cannot be empty");
+        }
+        if (std::find(
+                manifest.modules.begin(),
+                manifest.modules.end(),
+                *manifest.entry_module) == manifest.modules.end()) {
+            return Status::SerializationError("manifest entry_module not found in modules");
+        }
+    }
     return manifest;
 }
 
 struct ZipWriteEntry {
     std::string name;
     std::vector<uint8_t> data;
+    uint16_t method = kZipStoreMethod;
+    uint32_t compressed_size = 0;
+    uint32_t uncompressed_size = 0;
     uint32_t crc = 0;
     uint32_t local_offset = 0;
 };
 
-Status WriteStoredZip(
+Status WriteZip(
     const std::filesystem::path& path, std::vector<ZipWriteEntry> entries) {
+    if (entries.size() > static_cast<size_t>(std::numeric_limits<uint16_t>::max())) {
+        return Status::SerializationError("zip entry count exceeds 16-bit limit");
+    }
     std::vector<uint8_t> out;
     out.reserve(4096);
 
     for (auto& entry : entries) {
-        entry.crc = Crc32(entry.data);
-        entry.local_offset = static_cast<uint32_t>(out.size());
+        if (entry.name.size() > static_cast<size_t>(std::numeric_limits<uint16_t>::max())) {
+            return Status::SerializationError("zip entry name too long");
+        }
+        auto crc_or = Crc32(entry.data);
+        if (!crc_or.ok()) {
+            return crc_or.status();
+        }
+        entry.crc = crc_or.value();
+        auto uncompressed_size_or = ToZipSize(entry.data.size(), "uncompressed entry");
+        if (!uncompressed_size_or.ok()) {
+            return uncompressed_size_or.status();
+        }
+        entry.uncompressed_size = uncompressed_size_or.value();
+        auto compressed_or = DeflateRaw(entry.data);
+        if (!compressed_or.ok()) {
+            return compressed_or.status();
+        }
+        if (compressed_or.value().size() < entry.data.size()) {
+            entry.data = std::move(compressed_or.value());
+            entry.method = kZipDeflateMethod;
+        } else {
+            entry.method = kZipStoreMethod;
+        }
+        auto compressed_size_or = ToZipSize(entry.data.size(), "compressed entry");
+        if (!compressed_size_or.ok()) {
+            return compressed_size_or.status();
+        }
+        entry.compressed_size = compressed_size_or.value();
+        auto local_offset_or = ToZipSize(out.size(), "local header offset");
+        if (!local_offset_or.ok()) {
+            return local_offset_or.status();
+        }
+        entry.local_offset = local_offset_or.value();
         WriteU32(out, kZipLocalHeader);
         WriteU16(out, kZipVersion);
         WriteU16(out, 0);
-        WriteU16(out, kZipStoreMethod);
+        WriteU16(out, entry.method);
         WriteU16(out, 0);
         WriteU16(out, 0);
         WriteU32(out, entry.crc);
-        WriteU32(out, static_cast<uint32_t>(entry.data.size()));
-        WriteU32(out, static_cast<uint32_t>(entry.data.size()));
+        WriteU32(out, entry.compressed_size);
+        WriteU32(out, entry.uncompressed_size);
         WriteU16(out, static_cast<uint16_t>(entry.name.size()));
         WriteU16(out, 0);
         out.insert(out.end(), entry.name.begin(), entry.name.end());
         out.insert(out.end(), entry.data.begin(), entry.data.end());
     }
 
-    const uint32_t central_offset = static_cast<uint32_t>(out.size());
+    auto central_offset_or = ToZipSize(out.size(), "central directory offset");
+    if (!central_offset_or.ok()) {
+        return central_offset_or.status();
+    }
+    const uint32_t central_offset = central_offset_or.value();
     for (const auto& entry : entries) {
         WriteU32(out, kZipCentralHeader);
         WriteU16(out, kZipVersion);
         WriteU16(out, kZipVersion);
         WriteU16(out, 0);
-        WriteU16(out, kZipStoreMethod);
+        WriteU16(out, entry.method);
         WriteU16(out, 0);
         WriteU16(out, 0);
         WriteU32(out, entry.crc);
-        WriteU32(out, static_cast<uint32_t>(entry.data.size()));
-        WriteU32(out, static_cast<uint32_t>(entry.data.size()));
+        WriteU32(out, entry.compressed_size);
+        WriteU32(out, entry.uncompressed_size);
         WriteU16(out, static_cast<uint16_t>(entry.name.size()));
         WriteU16(out, 0);
         WriteU16(out, 0);
@@ -259,7 +424,11 @@ Status WriteStoredZip(
         WriteU32(out, entry.local_offset);
         out.insert(out.end(), entry.name.begin(), entry.name.end());
     }
-    const uint32_t central_size = static_cast<uint32_t>(out.size()) - central_offset;
+    auto central_end_or = ToZipSize(out.size(), "central directory end");
+    if (!central_end_or.ok()) {
+        return central_end_or.status();
+    }
+    const uint32_t central_size = central_end_or.value() - central_offset;
 
     WriteU32(out, kZipEndHeader);
     WriteU16(out, 0);
@@ -281,7 +450,7 @@ Status WriteStoredZip(
     return Status::Ok();
 }
 
-StatusOr<std::unordered_map<std::string, std::vector<uint8_t>>> ReadStoredZip(
+StatusOr<std::unordered_map<std::string, std::vector<uint8_t>>> ReadZip(
     const std::filesystem::path& path) {
     auto zip_or = ReadFile(path);
     if (!zip_or.ok()) {
@@ -323,6 +492,11 @@ StatusOr<std::unordered_map<std::string, std::vector<uint8_t>>> ReadStoredZip(
     if (comment_len_or.value() != 0) {
         return Status::Unsupported("zip comments are not supported");
     }
+    const size_t central_offset = static_cast<size_t>(central_offset_or.value());
+    const size_t central_size = static_cast<size_t>(central_size_or.value());
+    if (central_offset > bytes.size() || central_size > (bytes.size() - central_offset)) {
+        return Status::SerializationError("invalid zip central directory bounds");
+    }
 
     std::unordered_map<std::string, std::vector<uint8_t>> files;
     cursor = central_offset_or.value();
@@ -353,8 +527,11 @@ StatusOr<std::unordered_map<std::string, std::vector<uint8_t>>> ReadStoredZip(
             !ext_attr_or.ok() || !local_offset_or.ok()) {
             return Status::SerializationError("invalid zip central record");
         }
-        if (method_or.value() != kZipStoreMethod) {
-            return Status::Unsupported("only store method zip entries are supported");
+        if ((flags_or.value() & kZipFlagDataDescriptor) != 0u) {
+            return Status::Unsupported("zip data descriptor is not supported");
+        }
+        if (method_or.value() != kZipStoreMethod && method_or.value() != kZipDeflateMethod) {
+            return Status::Unsupported("zip compression method is not supported");
         }
         if (cursor + name_len_or.value() + extra_len_or.value() + comment_len_or2.value() > bytes.size()) {
             return Status::SerializationError("invalid zip central name range");
@@ -385,13 +562,42 @@ StatusOr<std::unordered_map<std::string, std::vector<uint8_t>>> ReadStoredZip(
             !local_extra_len_or.ok()) {
             return Status::SerializationError("invalid zip local record");
         }
+        if ((local_flags_or.value() & kZipFlagDataDescriptor) != 0u) {
+            return Status::Unsupported("zip local data descriptor is not supported");
+        }
+        if (local_method_or.value() != method_or.value()) {
+            return Status::SerializationError("zip local/central method mismatch");
+        }
+        if (local_comp_or.value() != comp_or.value() || local_uncomp_or.value() != uncomp_or.value()) {
+            return Status::SerializationError("zip local/central size mismatch");
+        }
         local += local_name_len_or.value() + local_extra_len_or.value();
-        if (local + local_uncomp_or.value() > bytes.size()) {
+        if (local + local_comp_or.value() > bytes.size()) {
             return Status::SerializationError("invalid zip local payload range");
         }
-        std::vector<uint8_t> payload(
+        std::vector<uint8_t> compressed(
             bytes.begin() + static_cast<ptrdiff_t>(local),
-            bytes.begin() + static_cast<ptrdiff_t>(local + local_uncomp_or.value()));
+            bytes.begin() + static_cast<ptrdiff_t>(local + local_comp_or.value()));
+        std::vector<uint8_t> payload;
+        if (method_or.value() == kZipStoreMethod) {
+            if (local_comp_or.value() != local_uncomp_or.value()) {
+                return Status::SerializationError("store entry has mismatched sizes");
+            }
+            payload = std::move(compressed);
+        } else {
+            auto inflated_or = InflateRaw(compressed, local_uncomp_or.value());
+            if (!inflated_or.ok()) {
+                return inflated_or.status();
+            }
+            payload = std::move(inflated_or.value());
+        }
+        auto payload_crc_or = Crc32(payload);
+        if (!payload_crc_or.ok()) {
+            return payload_crc_or.status();
+        }
+        if (payload_crc_or.value() != local_crc_or.value() || payload_crc_or.value() != crc_or.value()) {
+            return Status::SerializationError("zip crc mismatch");
+        }
         files.insert({std::move(name), std::move(payload)});
     }
 
@@ -443,7 +649,7 @@ Status TlbsBundle::SerializeToZip(const std::filesystem::path& zip_path) const {
     for (const auto& [path, bytes] : libraries_) {
         entries.push_back(ZipWriteEntry{path, bytes});
     }
-    return WriteStoredZip(zip_path, std::move(entries));
+    return WriteZip(zip_path, std::move(entries));
 }
 
 StatusOr<TlbsBundle> TlbsBundle::Deserialize(const std::filesystem::path& path) {
@@ -485,7 +691,7 @@ StatusOr<TlbsBundle> TlbsBundle::Deserialize(const std::filesystem::path& path) 
         return bundle;
     }
 
-    auto zip_or = ReadStoredZip(path);
+    auto zip_or = ReadZip(path);
     if (!zip_or.ok()) {
         return zip_or.status();
     }

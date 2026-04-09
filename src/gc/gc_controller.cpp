@@ -1,5 +1,6 @@
 #include "tie/vm/gc/gc_controller.hpp"
 
+#include <iterator>
 #include <queue>
 
 namespace tie::vm {
@@ -22,19 +23,26 @@ GcController::~GcController() {
 }
 
 StatusOr<ObjectId> GcController::Allocate() {
+    ObjectId id = 0;
+    bool trigger_major = false;
     {
         std::lock_guard<std::mutex> lock(mu_);
-        const ObjectId id = next_id_++;
+        id = next_id_++;
         Cell cell;
         cell.id = id;
         cell.generation = 0;
         heap_.insert({id, std::move(cell)});
-        if (heap_.size() > config_.old_threshold) {
+        ++young_count_;
+        if ((young_count_ > config_.young_threshold && !roots_.empty()) ||
+            heap_.size() > config_.old_threshold) {
             major_requested_ = true;
-            cv_.notify_one();
+            trigger_major = true;
         }
-        return id;
     }
+    if (trigger_major) {
+        cv_.notify_one();
+    }
+    return id;
 }
 
 Status GcController::AddReference(ObjectId from, ObjectId to) {
@@ -175,8 +183,8 @@ void GcController::MarkFromRoots(std::unordered_set<ObjectId>* marked) {
     }
 }
 
-void GcController::Sweep(bool young_only) {
-    std::vector<std::function<void()>> finalizers;
+void GcController::Sweep(bool young_only, std::vector<std::function<void()>>* finalizers_out) {
+    std::vector<std::function<void()>> local_finalizers;
     std::unordered_set<ObjectId> reclaimed;
     for (auto it = heap_.begin(); it != heap_.end();) {
         auto& cell = it->second;
@@ -189,7 +197,10 @@ void GcController::Sweep(bool young_only) {
             if (cell.finalizer) {
                 const ObjectId id = cell.id;
                 auto fn = cell.finalizer;
-                finalizers.emplace_back([id, fn = std::move(fn)]() { fn(id); });
+                local_finalizers.emplace_back([id, fn = std::move(fn)]() { fn(id); });
+            }
+            if (cell.generation == 0 && young_count_ > 0) {
+                --young_count_;
             }
             reclaimed.insert(cell.id);
             it = heap_.erase(it);
@@ -218,8 +229,11 @@ void GcController::Sweep(bool young_only) {
         roots_.erase(id);
     }
 
-    for (auto& fn : finalizers) {
-        fn();
+    if (finalizers_out != nullptr) {
+        finalizers_out->insert(
+            finalizers_out->end(),
+            std::make_move_iterator(local_finalizers.begin()),
+            std::make_move_iterator(local_finalizers.end()));
     }
 }
 
@@ -227,22 +241,31 @@ void GcController::PromoteYoung() {
     for (auto& [_, cell] : heap_) {
         if (cell.marked && cell.generation == 0) {
             cell.generation = 1;
+            if (young_count_ > 0) {
+                --young_count_;
+            }
         }
     }
 }
 
 Status GcController::CollectMinor() {
-    std::lock_guard<std::mutex> lock(mu_);
-    std::unordered_set<ObjectId> marked;
-    MarkFromRoots(&marked);
-    for (auto id : marked) {
-        auto it = heap_.find(id);
-        if (it != heap_.end()) {
-            it->second.marked = true;
+    std::vector<std::function<void()>> deferred_finalizers;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        std::unordered_set<ObjectId> marked;
+        MarkFromRoots(&marked);
+        for (auto id : marked) {
+            auto it = heap_.find(id);
+            if (it != heap_.end()) {
+                it->second.marked = true;
+            }
         }
+        PromoteYoung();
+        Sweep(true, &deferred_finalizers);
     }
-    PromoteYoung();
-    Sweep(true);
+    for (auto& fn : deferred_finalizers) {
+        fn();
+    }
     return Status::Ok();
 }
 
@@ -268,6 +291,7 @@ size_t GcController::LiveObjects() const {
 
 void GcController::RunMajorWorker() {
     while (true) {
+        std::vector<std::function<void()>> deferred_finalizers;
         std::unique_lock<std::mutex> lock(mu_);
         cv_.wait(lock, [&]() { return stop_.load() || major_requested_; });
         if (stop_.load()) {
@@ -283,9 +307,12 @@ void GcController::RunMajorWorker() {
                 it->second.marked = true;
             }
         }
-        Sweep(false);
+        Sweep(false, &deferred_finalizers);
         major_running_ = false;
         lock.unlock();
+        for (auto& fn : deferred_finalizers) {
+            fn();
+        }
         major_done_cv_.notify_all();
     }
 }

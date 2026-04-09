@@ -10,7 +10,9 @@ namespace tie::vm {
 
 VmInstance::VmInstance()
     : output_sink_([](const std::string& line) { std::cout << line << "\n"; }),
-      reflection_(&object_model_) {}
+      reflection_(&object_model_) {
+    object_model_.SetGcController(&gc_);
+}
 
 StatusOr<Value> VmInstance::ExecuteModule(const Module& module, const std::vector<Value>& args) {
     return exception_bridge_.Run([&]() {

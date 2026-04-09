@@ -133,6 +133,14 @@ std::string FormatInstruction(
         case OpCode::kDiv:
             out << Reg(inst.a) << " <- " << Reg(inst.b) << " / " << Reg(inst.c);
             break;
+        case OpCode::kAddImm:
+            out << Reg(inst.a) << " <- " << Reg(inst.b) << " + "
+                << static_cast<int32_t>(inst.c);
+            break;
+        case OpCode::kSubImm:
+            out << Reg(inst.a) << " <- " << Reg(inst.b) << " - "
+                << static_cast<int32_t>(inst.c);
+            break;
         case OpCode::kCmpEq:
             out << Reg(inst.a) << " <- (" << Reg(inst.b) << " == " << Reg(inst.c) << ")";
             break;
@@ -145,6 +153,24 @@ std::string FormatInstruction(
         case OpCode::kJmpIf: {
             const int64_t target = static_cast<int64_t>(pc) + static_cast<int32_t>(inst.b);
             out << "jmp_if " << Reg(inst.a) << ", " << static_cast<int32_t>(inst.b) << " -> "
+                << FormatTarget(target, code_size);
+            break;
+        }
+        case OpCode::kJmpIfZero: {
+            const int64_t target = static_cast<int64_t>(pc) + static_cast<int32_t>(inst.b);
+            out << "jmp_if_zero " << Reg(inst.a) << ", " << static_cast<int32_t>(inst.b)
+                << " -> " << FormatTarget(target, code_size);
+            break;
+        }
+        case OpCode::kJmpIfNotZero: {
+            const int64_t target = static_cast<int64_t>(pc) + static_cast<int32_t>(inst.b);
+            out << "jmp_if_not_zero " << Reg(inst.a) << ", " << static_cast<int32_t>(inst.b)
+                << " -> " << FormatTarget(target, code_size);
+            break;
+        }
+        case OpCode::kDecJnz: {
+            const int64_t target = static_cast<int64_t>(pc) + static_cast<int32_t>(inst.b);
+            out << "dec_jnz " << Reg(inst.a) << ", " << static_cast<int32_t>(inst.b) << " -> "
                 << FormatTarget(target, code_size);
             break;
         }

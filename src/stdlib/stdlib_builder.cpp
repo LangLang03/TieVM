@@ -192,6 +192,9 @@ std::vector<ExportSpec> CollectionsExports() {
         {"tie.std.collections.array_size", "tie_std_collections_array_size",
          {{AbiValueKind::kPointer, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
          {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.collections.array_free", "tie_std_collections_array_free",
+         {{AbiValueKind::kPointer, OwnershipQualifier::kOwned, FfiPassingMode::kValue, 0, 0}},
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
         {"tie.std.collections.map_new", "tie_std_collections_map_new", {},
          {AbiValueKind::kPointer, OwnershipQualifier::kOwned, FfiPassingMode::kValue, 0, 0}},
         {"tie.std.collections.map_set", "tie_std_collections_map_set",
@@ -212,6 +215,9 @@ std::vector<ExportSpec> CollectionsExports() {
              {AbiValueKind::kPointer, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
              {AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0},
          },
+         {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.collections.map_free", "tie_std_collections_map_free",
+         {{AbiValueKind::kPointer, OwnershipQualifier::kOwned, FfiPassingMode::kValue, 0, 0}},
          {AbiValueKind::kBool, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
     };
 }
@@ -303,6 +309,7 @@ StatusOr<TlbsBundle> BuildStdlibBundle() {
     bundle.manifest().name = "tie.stdlib";
     bundle.manifest().version = SemanticVersion{0, 2, 0};
     bundle.manifest().metadata["format"] = "tlbs";
+    bundle.manifest().entry_module = "modules/tie.std.io.tbc";
 
     const auto lib_relative =
         "libs/" + CurrentPlatformName() + "/" + CurrentArchName() + "/" +

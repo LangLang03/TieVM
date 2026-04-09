@@ -38,9 +38,18 @@ std::string_view OpCodeName(OpCode opcode) {
             return "new_object";
         case OpCode::kInvoke:
             return "invoke";
+        case OpCode::kAddImm:
+            return "add_imm";
+        case OpCode::kSubImm:
+            return "sub_imm";
+        case OpCode::kJmpIfZero:
+            return "jmp_if_zero";
+        case OpCode::kJmpIfNotZero:
+            return "jmp_if_not_zero";
+        case OpCode::kDecJnz:
+            return "dec_jnz";
     }
     return "unknown";
 }
 
 }  // namespace tie::vm
-

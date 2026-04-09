@@ -8,7 +8,12 @@ BasicBlock& Function::AddBlock(std::string name) {
 }
 
 std::vector<Instruction> Function::FlattenedInstructions() const {
+    size_t total = 0;
+    for (const auto& block : blocks_) {
+        total += block.instructions().size();
+    }
     std::vector<Instruction> flat;
+    flat.reserve(total);
     for (const auto& block : blocks_) {
         for (const auto& inst : block.instructions()) {
             flat.push_back(inst);

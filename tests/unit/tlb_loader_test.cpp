@@ -85,4 +85,25 @@ TEST(TlbLoaderTest, ModuleLoaderCanLoadTlbsBundle) {
     EXPECT_FALSE(names.empty());
 }
 
+TEST(TlbLoaderTest, TlbsManifestEntryModuleRoundTrip) {
+    Module module = test::BuildAddModule(4, 5);
+    auto bytes_or = Serializer::Serialize(module, false);
+    ASSERT_TRUE(bytes_or.ok()) << bytes_or.status().message();
+
+    TlbsBundle bundle;
+    bundle.manifest().name = "custom.bundle";
+    bundle.manifest().version = SemanticVersion{0, 2, 0};
+    bundle.manifest().modules = {"modules/test.math.tbc"};
+    bundle.manifest().entry_module = "modules/test.math.tbc";
+    bundle.SetModule("modules/test.math.tbc", std::move(bytes_or.value()));
+
+    const auto dir = test::TempPath("entry_module_roundtrip.tlbs");
+    ASSERT_TRUE(bundle.SerializeToDirectory(dir).ok());
+
+    auto loaded_or = TlbsBundle::Deserialize(dir);
+    ASSERT_TRUE(loaded_or.ok()) << loaded_or.status().message();
+    ASSERT_TRUE(loaded_or.value().manifest().entry_module.has_value());
+    EXPECT_EQ(*loaded_or.value().manifest().entry_module, "modules/test.math.tbc");
+}
+
 }  // namespace tie::vm

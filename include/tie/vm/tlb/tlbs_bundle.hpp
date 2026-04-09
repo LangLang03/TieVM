@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -13,6 +14,7 @@ namespace tie::vm {
 struct TlbsManifest {
     std::string name;
     SemanticVersion version{0, 1, 0};
+    std::optional<std::string> entry_module;
     std::vector<std::string> modules;
     std::unordered_map<std::string, std::string> metadata;
 };

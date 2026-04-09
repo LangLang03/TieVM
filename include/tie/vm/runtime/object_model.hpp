@@ -13,6 +13,8 @@
 
 namespace tie::vm {
 
+class GcController;
+
 enum class AccessModifier : uint8_t {
     kPublic = 0,
     kProtected = 1,
@@ -41,6 +43,8 @@ struct ObjectInstance {
 
 class ObjectModel {
   public:
+    void SetGcController(GcController* gc) { gc_ = gc; }
+
     Status RegisterClass(ClassDescriptor descriptor);
 
     [[nodiscard]] StatusOr<ObjectId> NewObject(std::string_view class_name);
@@ -62,7 +66,9 @@ class ObjectModel {
     mutable std::mutex mu_;
     std::unordered_map<std::string, ClassDescriptor> classes_;
     std::unordered_map<ObjectId, ObjectInstance> objects_;
+    mutable std::unordered_map<std::string, std::vector<std::string>> mro_cache_;
     ObjectId next_object_id_ = 1;
+    GcController* gc_ = nullptr;
 };
 
 }  // namespace tie::vm

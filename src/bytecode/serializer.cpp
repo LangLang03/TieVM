@@ -529,6 +529,10 @@ StatusOr<Module> Serializer::Deserialize(const std::vector<uint8_t>& bytes) {
         }
     }
 
+    if (offset != bytes.size()) {
+        return Status::SerializationError("trailing bytes after tbc payload");
+    }
+
     auto verify = Verifier::Verify(module);
     if (!verify.status.ok()) {
         return verify.status;

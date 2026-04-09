@@ -37,6 +37,18 @@ InstructionBuilder& InstructionBuilder::Div(uint32_t dst, uint32_t lhs, uint32_t
     return *this;
 }
 
+InstructionBuilder& InstructionBuilder::AddImm(uint32_t dst, uint32_t src, int32_t imm) {
+    block_->Append(
+        MakeInstruction(OpCode::kAddImm, dst, src, static_cast<uint32_t>(imm)));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::SubImm(uint32_t dst, uint32_t src, int32_t imm) {
+    block_->Append(
+        MakeInstruction(OpCode::kSubImm, dst, src, static_cast<uint32_t>(imm)));
+    return *this;
+}
+
 InstructionBuilder& InstructionBuilder::CmpEq(uint32_t dst, uint32_t lhs, uint32_t rhs) {
     block_->Append(MakeInstruction(OpCode::kCmpEq, dst, lhs, rhs));
     return *this;
@@ -50,6 +62,24 @@ InstructionBuilder& InstructionBuilder::Jmp(int32_t offset) {
 InstructionBuilder& InstructionBuilder::JmpIf(uint32_t cond, int32_t offset) {
     block_->Append(
         MakeInstruction(OpCode::kJmpIf, cond, static_cast<uint32_t>(offset), 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::JmpIfZero(uint32_t reg, int32_t offset) {
+    block_->Append(
+        MakeInstruction(OpCode::kJmpIfZero, reg, static_cast<uint32_t>(offset), 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::JmpIfNotZero(uint32_t reg, int32_t offset) {
+    block_->Append(
+        MakeInstruction(OpCode::kJmpIfNotZero, reg, static_cast<uint32_t>(offset), 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::DecJnz(uint32_t reg, int32_t offset) {
+    block_->Append(
+        MakeInstruction(OpCode::kDecJnz, reg, static_cast<uint32_t>(offset), 0));
     return *this;
 }
 

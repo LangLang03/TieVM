@@ -4,6 +4,8 @@
 #include <optional>
 #include <unordered_set>
 
+#include "tie/vm/gc/gc_controller.hpp"
+
 namespace tie::vm {
 
 namespace {
@@ -106,6 +108,7 @@ Status ObjectModel::RegisterClass(ClassDescriptor descriptor) {
         }
     }
     classes_.insert({descriptor.name, std::move(descriptor)});
+    mro_cache_.clear();
     return Status::Ok();
 }
 
@@ -115,7 +118,14 @@ StatusOr<ObjectId> ObjectModel::NewObject(std::string_view class_name) {
     if (!classes_.contains(name)) {
         return Status::NotFound("class not found: " + name);
     }
-    const ObjectId id = next_object_id_++;
+    ObjectId id = next_object_id_++;
+    if (gc_ != nullptr) {
+        auto id_or = gc_->Allocate();
+        if (!id_or.ok()) {
+            return id_or.status();
+        }
+        id = id_or.value();
+    }
     objects_[id] = ObjectInstance{id, name, {}};
     return id;
 }
@@ -126,7 +136,21 @@ Status ObjectModel::SetField(ObjectId object_id, std::string_view field, Value v
     if (it == objects_.end()) {
         return Status::NotFound("object not found");
     }
-    it->second.fields[std::string(field)] = value;
+    const std::string field_name(field);
+    if (gc_ != nullptr) {
+        auto prev = it->second.fields.find(field_name);
+        if (prev != it->second.fields.end() &&
+            prev->second.type() == Value::Type::kObject) {
+            (void)gc_->RemoveReference(object_id, prev->second.AsObject());
+        }
+        if (value.type() == Value::Type::kObject) {
+            auto add_status = gc_->AddReference(object_id, value.AsObject());
+            if (!add_status.ok()) {
+                return add_status;
+            }
+        }
+    }
+    it->second.fields[field_name] = value;
     return Status::Ok();
 }
 
@@ -147,6 +171,7 @@ StatusOr<Value> ObjectModel::Invoke(
     ObjectId object_id, std::string_view method, const std::vector<Value>& args,
     bool allow_private) const {
     std::function<StatusOr<Value>(ObjectId, const std::vector<Value>&)> call;
+    const std::string method_name(method);
     {
         std::lock_guard<std::mutex> lock(mu_);
         auto obj_it = objects_.find(object_id);
@@ -154,17 +179,22 @@ StatusOr<Value> ObjectModel::Invoke(
             return Status::NotFound("object not found");
         }
 
-        std::unordered_map<std::string, std::vector<std::string>> memo;
-        std::unordered_set<std::string> visiting;
-        auto mro_or =
-            LinearizeClass(classes_, obj_it->second.class_name, &memo, &visiting);
-        if (!mro_or.ok()) {
-            return mro_or.status();
+        auto mro_it = mro_cache_.find(obj_it->second.class_name);
+        if (mro_it == mro_cache_.end()) {
+            std::unordered_map<std::string, std::vector<std::string>> memo;
+            std::unordered_set<std::string> visiting;
+            auto mro_or =
+                LinearizeClass(classes_, obj_it->second.class_name, &memo, &visiting);
+            if (!mro_or.ok()) {
+                return mro_or.status();
+            }
+            mro_it =
+                mro_cache_.emplace(obj_it->second.class_name, std::move(mro_or.value())).first;
         }
 
-        for (const auto& klass_name : mro_or.value()) {
+        for (const auto& klass_name : mro_it->second) {
             const auto& klass = classes_.at(klass_name);
-            auto m_it = klass.methods.find(std::string(method));
+            auto m_it = klass.methods.find(method_name);
             if (m_it == klass.methods.end()) {
                 continue;
             }
@@ -184,9 +214,19 @@ StatusOr<Value> ObjectModel::Invoke(
 
 StatusOr<std::vector<std::string>> ObjectModel::ComputeMro(std::string_view class_name) const {
     std::lock_guard<std::mutex> lock(mu_);
+    const std::string class_key(class_name);
+    auto it = mro_cache_.find(class_key);
+    if (it != mro_cache_.end()) {
+        return it->second;
+    }
     std::unordered_map<std::string, std::vector<std::string>> memo;
     std::unordered_set<std::string> visiting;
-    return LinearizeClass(classes_, std::string(class_name), &memo, &visiting);
+    auto mro_or = LinearizeClass(classes_, class_key, &memo, &visiting);
+    if (!mro_or.ok()) {
+        return mro_or.status();
+    }
+    auto inserted = mro_cache_.emplace(class_key, mro_or.value());
+    return inserted.first->second;
 }
 
 StatusOr<ClassDescriptor> ObjectModel::GetClass(std::string_view class_name) const {
@@ -211,9 +251,19 @@ std::vector<std::string> ObjectModel::ListClassNames() const {
 
 StatusOr<std::vector<std::string>> ObjectModel::Linearize(std::string_view class_name) const {
     std::lock_guard<std::mutex> lock(mu_);
+    const std::string class_key(class_name);
+    auto it = mro_cache_.find(class_key);
+    if (it != mro_cache_.end()) {
+        return it->second;
+    }
     std::unordered_map<std::string, std::vector<std::string>> memo;
     std::unordered_set<std::string> visiting;
-    return LinearizeClass(classes_, std::string(class_name), &memo, &visiting);
+    auto mro_or = LinearizeClass(classes_, class_key, &memo, &visiting);
+    if (!mro_or.ok()) {
+        return mro_or.status();
+    }
+    auto inserted = mro_cache_.emplace(class_key, mro_or.value());
+    return inserted.first->second;
 }
 
 StatusOr<std::vector<std::string>> ObjectModel::MergeC3(

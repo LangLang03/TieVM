@@ -5,6 +5,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -33,6 +34,7 @@ class ModuleLoader {
     Status LoadTlbsFile(const std::filesystem::path& path);
 
     [[nodiscard]] StatusOr<Module> GetModule(const std::string& name) const;
+    [[nodiscard]] std::optional<Module> FindModuleByFfiSymbol(std::string_view symbol) const;
     [[nodiscard]] std::vector<std::string> ActiveModuleNames() const;
 
     [[nodiscard]] HotReloadSession BeginHotReload();

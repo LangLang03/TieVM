@@ -130,6 +130,15 @@ TIEVM_STD_EXPORT int64_t tie_std_collections_array_size(uint64_t array_handle) {
     return static_cast<int64_t>(array->data.size());
 }
 
+TIEVM_STD_EXPORT bool tie_std_collections_array_free(uint64_t array_handle) {
+    auto* array = reinterpret_cast<TieArray*>(array_handle);
+    if (array == nullptr) {
+        return false;
+    }
+    delete array;
+    return true;
+}
+
 TIEVM_STD_EXPORT uint64_t tie_std_collections_map_new() {
     auto* map = new TieMap();
     return reinterpret_cast<uint64_t>(map);
@@ -163,6 +172,15 @@ TIEVM_STD_EXPORT bool tie_std_collections_map_has(uint64_t map_handle, const cha
         return false;
     }
     return map->data.contains(std::string(key));
+}
+
+TIEVM_STD_EXPORT bool tie_std_collections_map_free(uint64_t map_handle) {
+    auto* map = reinterpret_cast<TieMap*>(map_handle);
+    if (map == nullptr) {
+        return false;
+    }
+    delete map;
+    return true;
 }
 
 TIEVM_STD_EXPORT const char* tie_std_string_concat(const char* lhs, const char* rhs) {

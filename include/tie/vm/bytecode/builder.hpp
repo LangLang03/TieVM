@@ -19,9 +19,14 @@ class InstructionBuilder {
     InstructionBuilder& Sub(uint32_t dst, uint32_t lhs, uint32_t rhs);
     InstructionBuilder& Mul(uint32_t dst, uint32_t lhs, uint32_t rhs);
     InstructionBuilder& Div(uint32_t dst, uint32_t lhs, uint32_t rhs);
+    InstructionBuilder& AddImm(uint32_t dst, uint32_t src, int32_t imm);
+    InstructionBuilder& SubImm(uint32_t dst, uint32_t src, int32_t imm);
     InstructionBuilder& CmpEq(uint32_t dst, uint32_t lhs, uint32_t rhs);
     InstructionBuilder& Jmp(int32_t offset);
     InstructionBuilder& JmpIf(uint32_t cond, int32_t offset);
+    InstructionBuilder& JmpIfZero(uint32_t reg, int32_t offset);
+    InstructionBuilder& JmpIfNotZero(uint32_t reg, int32_t offset);
+    InstructionBuilder& DecJnz(uint32_t reg, int32_t offset);
     InstructionBuilder& Call(uint32_t ret_reg, uint32_t function_index, uint32_t arg_count);
     InstructionBuilder& FfiCall(uint32_t ret_reg, uint32_t symbol_index, uint32_t arg_count);
     InstructionBuilder& NewObject(uint32_t dst, uint32_t class_name_constant);

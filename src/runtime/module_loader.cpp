@@ -52,6 +52,7 @@ Status ModuleLoader::LoadTlbsFile(const std::filesystem::path& path) {
         return bundle_or.status();
     }
     const auto& bundle = bundle_or.value();
+    const auto& manifest = bundle.manifest();
 
     std::filesystem::path root_dir = path;
     if (!std::filesystem::is_directory(path)) {
@@ -68,7 +69,8 @@ Status ModuleLoader::LoadTlbsFile(const std::filesystem::path& path) {
     }
 
     std::unordered_map<std::string, std::string> symbol_origin;
-    for (const auto& module_path : bundle.manifest().modules) {
+    bool entry_module_loaded = !manifest.entry_module.has_value();
+    for (const auto& module_path : manifest.modules) {
         auto it = bundle.modules().find(module_path);
         if (it == bundle.modules().end()) {
             return Status::NotFound("module bytes missing in bundle: " + module_path);
@@ -105,6 +107,12 @@ Status ModuleLoader::LoadTlbsFile(const std::filesystem::path& path) {
         if (!status.ok()) {
             return status;
         }
+        if (manifest.entry_module.has_value() && module_path == *manifest.entry_module) {
+            entry_module_loaded = true;
+        }
+    }
+    if (!entry_module_loaded) {
+        return Status::NotFound("entry module missing from tlbs manifest");
     }
     return Status::Ok();
 }
@@ -116,6 +124,30 @@ StatusOr<Module> ModuleLoader::GetModule(const std::string& name) const {
         return Status::NotFound("module not loaded: " + name);
     }
     return it->second.module;
+}
+
+std::optional<Module> ModuleLoader::FindModuleByFfiSymbol(std::string_view symbol) const {
+    std::lock_guard<std::mutex> lock(mu_);
+    const LoadedModule* best = nullptr;
+    for (const auto& [name, loaded] : modules_) {
+        bool matched = false;
+        for (const auto& binding : loaded.module.ffi_bindings()) {
+            if (binding.vm_symbol == symbol) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            continue;
+        }
+        if (best == nullptr || name < best->name) {
+            best = &loaded;
+        }
+    }
+    if (best == nullptr) {
+        return std::nullopt;
+    }
+    return best->module;
 }
 
 std::vector<std::string> ModuleLoader::ActiveModuleNames() const {

@@ -9,7 +9,9 @@ namespace {
 
 bool IsControlFlow(OpCode opcode) {
     return opcode == OpCode::kJmp || opcode == OpCode::kJmpIf || opcode == OpCode::kRet ||
-           opcode == OpCode::kThrow || opcode == OpCode::kHalt;
+           opcode == OpCode::kThrow || opcode == OpCode::kHalt ||
+           opcode == OpCode::kJmpIfZero || opcode == OpCode::kJmpIfNotZero ||
+           opcode == OpCode::kDecJnz;
 }
 
 }  // namespace
@@ -79,12 +81,23 @@ VerificationResult Verifier::Verify(const Module& module) {
             auto ensure_reg = [&](uint32_t reg) -> bool {
                 return reg < function.reg_count();
             };
+            auto ensure_arg_window = [&](uint32_t base_reg, uint32_t arg_count) -> bool {
+                const uint64_t max_reg =
+                    static_cast<uint64_t>(base_reg) + static_cast<uint64_t>(arg_count);
+                return max_reg < function.reg_count();
+            };
             switch (inst.opcode) {
                 case OpCode::kMov:
-                case OpCode::kLoadK:
-                    if (!ensure_reg(inst.a)) {
+                    if (!ensure_reg(inst.a) || !ensure_reg(inst.b)) {
                         result.status = Status::VerificationFailed(
-                            "register out of range for mov/loadk");
+                            "register out of range for mov");
+                        return result;
+                    }
+                    break;
+                case OpCode::kLoadK:
+                    if (!ensure_reg(inst.a) || inst.b >= module.constants().size()) {
+                        result.status = Status::VerificationFailed(
+                            "loadk requires dst register and valid constant index");
                         return result;
                     }
                     break;
@@ -96,6 +109,14 @@ VerificationResult Verifier::Verify(const Module& module) {
                     if (!ensure_reg(inst.a) || !ensure_reg(inst.b) || !ensure_reg(inst.c)) {
                         result.status =
                             Status::VerificationFailed("register out of range for arithmetic");
+                        return result;
+                    }
+                    break;
+                case OpCode::kAddImm:
+                case OpCode::kSubImm:
+                    if (!ensure_reg(inst.a) || !ensure_reg(inst.b)) {
+                        result.status =
+                            Status::VerificationFailed("register out of range for imm arithmetic");
                         return result;
                     }
                     break;
@@ -130,6 +151,73 @@ VerificationResult Verifier::Verify(const Module& module) {
                     }
                     break;
                 }
+                case OpCode::kJmpIfZero:
+                case OpCode::kJmpIfNotZero: {
+                    if (!ensure_reg(inst.a)) {
+                        result.status =
+                            Status::VerificationFailed("condition register out of range");
+                        return result;
+                    }
+                    const int32_t delta = static_cast<int32_t>(inst.b);
+                    const int64_t next = static_cast<int64_t>(i) + delta;
+                    if (next < 0 || next >= static_cast<int64_t>(instructions.size())) {
+                        result.status = Status::VerificationFailed("conditional jump target out of range");
+                        return result;
+                    }
+                    break;
+                }
+                case OpCode::kDecJnz: {
+                    if (!ensure_reg(inst.a)) {
+                        result.status =
+                            Status::VerificationFailed("counter register out of range");
+                        return result;
+                    }
+                    const int32_t delta = static_cast<int32_t>(inst.b);
+                    const int64_t next = static_cast<int64_t>(i) + delta;
+                    if (next < 0 || next >= static_cast<int64_t>(instructions.size())) {
+                        result.status = Status::VerificationFailed("dec_jnz target out of range");
+                        return result;
+                    }
+                    break;
+                }
+                case OpCode::kCall:
+                    if (inst.b >= module.functions().size()) {
+                        result.status =
+                            Status::VerificationFailed("call target function index out of range");
+                        return result;
+                    }
+                    if (!ensure_arg_window(inst.a, inst.c)) {
+                        result.status =
+                            Status::VerificationFailed("call register window out of range");
+                        return result;
+                    }
+                    if (module.functions()[inst.b].param_count() != inst.c) {
+                        result.status =
+                            Status::VerificationFailed("call argument count mismatch");
+                        return result;
+                    }
+                    break;
+                case OpCode::kFfiCall:
+                    if (!ensure_arg_window(inst.a, inst.c)) {
+                        result.status =
+                            Status::VerificationFailed("ffi_call register window out of range");
+                        return result;
+                    }
+                    if (inst.b >= module.constants().size() ||
+                        module.constants()[inst.b].type != ConstantType::kUtf8) {
+                        result.status =
+                            Status::VerificationFailed("ffi_call requires utf8 symbol constant");
+                        return result;
+                    }
+                    if (!module.ffi_bindings().empty()) {
+                        const auto& symbol = module.constants()[inst.b].utf8_value;
+                        if (!ffi_symbol_names.contains(symbol)) {
+                            result.status = Status::VerificationFailed(
+                                "ffi_call symbol missing from ffi binding table");
+                            return result;
+                        }
+                    }
+                    break;
                 case OpCode::kNewObject:
                     if (!ensure_reg(inst.a) || inst.b >= module.constants().size() ||
                         module.constants()[inst.b].type != ConstantType::kUtf8) {
@@ -140,35 +228,15 @@ VerificationResult Verifier::Verify(const Module& module) {
                     break;
                 case OpCode::kInvoke:
                     if (!ensure_reg(inst.a) || inst.b >= module.constants().size() ||
-                        module.constants()[inst.b].type != ConstantType::kUtf8) {
+                        module.constants()[inst.b].type != ConstantType::kUtf8 ||
+                        !ensure_arg_window(inst.a, inst.c)) {
                         result.status = Status::VerificationFailed(
-                            "invoke requires object register and utf8 method constant");
+                            "invoke requires valid object register, args and utf8 method constant");
                         return result;
                     }
                     break;
                 default:
                     break;
-            }
-            if (inst.opcode == OpCode::kFfiCall) {
-                if (!ensure_reg(inst.a)) {
-                    result.status =
-                        Status::VerificationFailed("ffi_call return register out of range");
-                    return result;
-                }
-                if (inst.b >= module.constants().size() ||
-                    module.constants()[inst.b].type != ConstantType::kUtf8) {
-                    result.status =
-                        Status::VerificationFailed("ffi_call requires utf8 symbol constant");
-                    return result;
-                }
-                if (!module.ffi_bindings().empty()) {
-                    const auto& symbol = module.constants()[inst.b].utf8_value;
-                    if (!ffi_symbol_names.contains(symbol)) {
-                        result.status = Status::VerificationFailed(
-                            "ffi_call symbol missing from ffi binding table");
-                        return result;
-                    }
-                }
             }
             if (IsControlFlow(inst.opcode) && i + 1 < instructions.size()) {
                 result.warnings.emplace_back(

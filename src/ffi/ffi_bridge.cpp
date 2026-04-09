@@ -48,6 +48,13 @@ Ret CallMaskedImpl(void* symbol, const AbiScalar* args, std::index_sequence<I...
     return fn(ReadAs<ArgByMask<I, Mask>>(args[I])...);
 }
 
+template <uint64_t Mask, size_t... I>
+void CallVoidMaskedImpl(void* symbol, const AbiScalar* args, std::index_sequence<I...>) {
+    using Fn = void (*)(ArgByMask<I, Mask>...);
+    auto* fn = reinterpret_cast<Fn>(symbol);
+    fn(ReadAs<ArgByMask<I, Mask>>(args[I])...);
+}
+
 template <typename Ret, size_t N, uint64_t Mask = 0>
 Ret CallByMask(void* symbol, uint64_t runtime_mask, const AbiScalar* args) {
     if constexpr (Mask < (1ULL << N)) {
@@ -64,69 +71,7 @@ template <size_t N, uint64_t Mask = 0>
 void CallVoidByMask(void* symbol, uint64_t runtime_mask, const AbiScalar* args) {
     if constexpr (Mask < (1ULL << N)) {
         if (runtime_mask == Mask) {
-            if constexpr (N == 0) {
-                using F0 = void (*)();
-                auto* fn = reinterpret_cast<F0>(symbol);
-                fn();
-            } else {
-                if constexpr (N == 1) {
-                    using F1 = void (*)(ArgByMask<0, Mask>);
-                    auto* fn = reinterpret_cast<F1>(symbol);
-                    fn(ReadAs<ArgByMask<0, Mask>>(args[0]));
-                } else if constexpr (N == 2) {
-                    using F2 = void (*)(ArgByMask<0, Mask>, ArgByMask<1, Mask>);
-                    auto* fn = reinterpret_cast<F2>(symbol);
-                    fn(ReadAs<ArgByMask<0, Mask>>(args[0]), ReadAs<ArgByMask<1, Mask>>(args[1]));
-                } else if constexpr (N == 3) {
-                    using F3 = void (*)(ArgByMask<0, Mask>, ArgByMask<1, Mask>, ArgByMask<2, Mask>);
-                    auto* fn = reinterpret_cast<F3>(symbol);
-                    fn(ReadAs<ArgByMask<0, Mask>>(args[0]), ReadAs<ArgByMask<1, Mask>>(args[1]),
-                       ReadAs<ArgByMask<2, Mask>>(args[2]));
-                } else if constexpr (N == 4) {
-                    using F4 =
-                        void (*)(ArgByMask<0, Mask>, ArgByMask<1, Mask>, ArgByMask<2, Mask>,
-                                 ArgByMask<3, Mask>);
-                    auto* fn = reinterpret_cast<F4>(symbol);
-                    fn(ReadAs<ArgByMask<0, Mask>>(args[0]), ReadAs<ArgByMask<1, Mask>>(args[1]),
-                       ReadAs<ArgByMask<2, Mask>>(args[2]), ReadAs<ArgByMask<3, Mask>>(args[3]));
-                } else if constexpr (N == 5) {
-                    using F5 =
-                        void (*)(ArgByMask<0, Mask>, ArgByMask<1, Mask>, ArgByMask<2, Mask>,
-                                 ArgByMask<3, Mask>, ArgByMask<4, Mask>);
-                    auto* fn = reinterpret_cast<F5>(symbol);
-                    fn(ReadAs<ArgByMask<0, Mask>>(args[0]), ReadAs<ArgByMask<1, Mask>>(args[1]),
-                       ReadAs<ArgByMask<2, Mask>>(args[2]), ReadAs<ArgByMask<3, Mask>>(args[3]),
-                       ReadAs<ArgByMask<4, Mask>>(args[4]));
-                } else if constexpr (N == 6) {
-                    using F6 =
-                        void (*)(ArgByMask<0, Mask>, ArgByMask<1, Mask>, ArgByMask<2, Mask>,
-                                 ArgByMask<3, Mask>, ArgByMask<4, Mask>, ArgByMask<5, Mask>);
-                    auto* fn = reinterpret_cast<F6>(symbol);
-                    fn(ReadAs<ArgByMask<0, Mask>>(args[0]), ReadAs<ArgByMask<1, Mask>>(args[1]),
-                       ReadAs<ArgByMask<2, Mask>>(args[2]), ReadAs<ArgByMask<3, Mask>>(args[3]),
-                       ReadAs<ArgByMask<4, Mask>>(args[4]), ReadAs<ArgByMask<5, Mask>>(args[5]));
-                } else if constexpr (N == 7) {
-                    using F7 =
-                        void (*)(ArgByMask<0, Mask>, ArgByMask<1, Mask>, ArgByMask<2, Mask>,
-                                 ArgByMask<3, Mask>, ArgByMask<4, Mask>, ArgByMask<5, Mask>,
-                                 ArgByMask<6, Mask>);
-                    auto* fn = reinterpret_cast<F7>(symbol);
-                    fn(ReadAs<ArgByMask<0, Mask>>(args[0]), ReadAs<ArgByMask<1, Mask>>(args[1]),
-                       ReadAs<ArgByMask<2, Mask>>(args[2]), ReadAs<ArgByMask<3, Mask>>(args[3]),
-                       ReadAs<ArgByMask<4, Mask>>(args[4]), ReadAs<ArgByMask<5, Mask>>(args[5]),
-                       ReadAs<ArgByMask<6, Mask>>(args[6]));
-                } else {
-                    using F8 =
-                        void (*)(ArgByMask<0, Mask>, ArgByMask<1, Mask>, ArgByMask<2, Mask>,
-                                 ArgByMask<3, Mask>, ArgByMask<4, Mask>, ArgByMask<5, Mask>,
-                                 ArgByMask<6, Mask>, ArgByMask<7, Mask>);
-                    auto* fn = reinterpret_cast<F8>(symbol);
-                    fn(ReadAs<ArgByMask<0, Mask>>(args[0]), ReadAs<ArgByMask<1, Mask>>(args[1]),
-                       ReadAs<ArgByMask<2, Mask>>(args[2]), ReadAs<ArgByMask<3, Mask>>(args[3]),
-                       ReadAs<ArgByMask<4, Mask>>(args[4]), ReadAs<ArgByMask<5, Mask>>(args[5]),
-                       ReadAs<ArgByMask<6, Mask>>(args[6]), ReadAs<ArgByMask<7, Mask>>(args[7]));
-                }
-            }
+            CallVoidMaskedImpl<Mask>(symbol, args, std::make_index_sequence<N>{});
             return;
         }
         return CallVoidByMask<N, Mask + 1>(symbol, runtime_mask, args);
@@ -332,7 +277,30 @@ Value ConvertRawResultToValue(VmThread& vm_thread, const AbiType& type, uint64_t
 
 std::string MakePlanCacheKey(
     const Module& module, uint32_t function_index, std::string_view symbol_name) {
-    return module.name() + "#" + std::to_string(function_index) + ":" + std::string(symbol_name);
+    const auto& version = module.version();
+    return module.name() + "@" + std::to_string(version.major) + "." +
+           std::to_string(version.minor) + "." + std::to_string(version.patch) + "#" +
+           std::to_string(function_index) + ":" + std::string(symbol_name);
+}
+
+Status ValidateCallingConvention(CallingConvention convention) {
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    (void)convention;
+    return Status::Ok();
+#elif defined(_WIN32)
+    if (convention == CallingConvention::kSystem || convention == CallingConvention::kCdecl ||
+        convention == CallingConvention::kStdcall ||
+        convention == CallingConvention::kFastcall) {
+        return Status::Ok();
+    }
+    return Status::Unsupported("unsupported ffi calling convention");
+#else
+    if (convention == CallingConvention::kSystem || convention == CallingConvention::kCdecl) {
+        return Status::Ok();
+    }
+    return Status::Unsupported(
+        "ffi stdcall/fastcall are unsupported on this platform backend");
+#endif
 }
 
 }  // namespace
@@ -436,6 +404,17 @@ StatusOr<FfiBridge::DynamicCallPlan> FfiBridge::ResolveDynamicPlan(
     plan.signature = module.ffi_signatures()[binding.signature_index];
     plan.library_path = module.ffi_library_paths()[binding.library_index];
     plan.symbol_name = binding.native_symbol;
+    if (function_index < module.functions().size() &&
+        module.functions()[function_index].ffi_binding().enabled) {
+        const auto expected = module.functions()[function_index].ffi_binding().convention;
+        if (expected != plan.signature.convention) {
+            return Status::InvalidState("ffi function header convention mismatch");
+        }
+    }
+    auto convention_status = ValidateCallingConvention(plan.signature.convention);
+    if (!convention_status.ok()) {
+        return convention_status;
+    }
     auto symbol_or = LoadDynamicSymbol(plan.library_path, plan.symbol_name);
     if (!symbol_or.ok()) {
         return symbol_or.status();

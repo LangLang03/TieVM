@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include "tie/vm/bytecode/module.hpp"
@@ -21,8 +23,12 @@ class VmThread {
     [[nodiscard]] const VmInstance& owner() const { return *owner_; }
 
   private:
+    using InstructionCache = std::unordered_map<uint32_t, std::vector<Instruction>>;
+    using DebugLineMap = std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>>;
+
     [[nodiscard]] StatusOr<Value> ExecuteFunction(
-        const Module& module, uint32_t function_index, const std::vector<Value>& args);
+        const Module& module, uint32_t function_index, const std::vector<Value>& args,
+        InstructionCache& instruction_cache, const DebugLineMap& debug_line_map);
 
     VmInstance* owner_;
 };

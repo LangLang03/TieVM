@@ -63,7 +63,7 @@ class GcController {
 
     void RunMajorWorker();
     void MarkFromRoots(std::unordered_set<ObjectId>* marked);
-    void Sweep(bool young_only);
+    void Sweep(bool young_only, std::vector<std::function<void()>>* finalizers);
     void PromoteYoung();
 
     Config config_;
@@ -77,6 +77,7 @@ class GcController {
     std::vector<ObjectId> phantom_queue_;
     ObjectId next_id_ = 1;
     uint64_t next_ref_id_ = 1;
+    size_t young_count_ = 0;
 
     std::thread major_worker_;
     std::atomic<bool> stop_{false};

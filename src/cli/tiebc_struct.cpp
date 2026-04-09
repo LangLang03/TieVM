@@ -52,13 +52,14 @@ int PrintTbcStruct() {
 int PrintTlbsStruct() {
     std::cout << "TLBS package layout:\n";
     std::cout << "  manifest.toml\n";
+    std::cout << "    name/version/modules/(optional) entry_module\n";
     std::cout << "  modules/\n";
     std::cout << "    *.tbc (ffi metadata embedded in bytecode extension section)\n";
     std::cout << "  libs/<platform>/<arch>/\n";
     std::cout << "    *.dll|*.so|*.dylib\n";
     std::cout << "Formats:\n";
     std::cout << "  - directory bundle: .tlbs directory\n";
-    std::cout << "  - zip bundle: .tlbs file (zip store mode)\n";
+    std::cout << "  - zip bundle: .tlbs file (zip store/deflate mode)\n";
     return 0;
 }
 
@@ -71,6 +72,9 @@ int CheckTlbs(const std::filesystem::path& path) {
     const auto& bundle = bundle_or.value();
     std::cout << "name: " << bundle.manifest().name << "\n";
     std::cout << "version: " << bundle.manifest().version.ToString() << "\n";
+    if (bundle.manifest().entry_module.has_value()) {
+        std::cout << "entry_module: " << *bundle.manifest().entry_module << "\n";
+    }
     std::cout << "modules: " << bundle.manifest().modules.size() << "\n";
     std::cout << "libraries: " << bundle.libraries().size() << "\n";
     return 0;

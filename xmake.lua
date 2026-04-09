@@ -7,17 +7,23 @@ set_defaultmode("debug")
 add_rules("mode.debug", "mode.release")
 
 add_requires("gtest 1.14.0")
+add_requires("zlib")
 
 if is_mode("sanitize") then
     set_symbols("debug")
     set_optimize("none")
-    add_cxflags("-fsanitize=address,undefined", {force = true})
-    add_ldflags("-fsanitize=address,undefined", {force = true})
+    if is_plat("windows") then
+        add_defines("TIEVM_SANITIZE_STUB=1")
+    else
+        add_cxflags("-fsanitize=address,undefined", {force = true})
+        add_ldflags("-fsanitize=address,undefined", {force = true})
+    end
 end
 
 target("tievm_core")
     set_kind("static")
     add_includedirs("include", {public = true})
+    add_packages("zlib", {public = true})
     add_headerfiles("include/(tie/**.hpp)")
     add_files(
         "src/bytecode/*.cpp",
@@ -69,3 +75,10 @@ target("tievm_tests")
     add_files("tests/test_main.cpp", "tests/unit/*.cpp", "tests/smoke/*.cpp")
     add_packages("gtest")
     add_deps("tievm_core", "tievm_std_native")
+
+target("tievm_perf")
+    set_kind("binary")
+    add_includedirs("include")
+    add_files("benchmarks/tievm_perf.cpp")
+    add_deps("tievm_core")
+    set_targetdir("artifacts/perf")
