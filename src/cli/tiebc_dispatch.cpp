@@ -8,6 +8,7 @@
 namespace tie::vm::cli {
 
 int Usage() {
+#if defined(TIEVM_ENABLE_HELP)
     std::cerr << "Usage:\n";
     std::cerr << "  tiebc check <file.tbc>\n";
     std::cerr << "  tiebc disasm <file.tbc>\n";
@@ -26,6 +27,7 @@ int Usage() {
     std::cerr << "  tiebc emit-opset <output.tbc>\n";
     std::cerr << "  tiebc emit-oop-ok <output.tbc>\n";
     std::cerr << "  tiebc emit-oop-error <output.tbc>\n";
+#endif
     return 1;
 }
 

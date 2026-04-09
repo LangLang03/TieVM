@@ -60,32 +60,40 @@ int RunTbcFile(VmInstance& vm, const std::filesystem::path& input) {
     if (std::filesystem::exists(stdlib_candidate)) {
         auto load_status = vm.loader().LoadTlbsFile(stdlib_candidate);
         if (!load_status.ok()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
             std::cerr << "warning: auto-load stdlib.tlbs failed: " << load_status.message()
                       << "\n";
+#endif
         }
     }
 
     auto module_or = Serializer::DeserializeFromFile(input);
     if (!module_or.ok()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
         std::cerr << "deserialize failed: " << module_or.status().message() << "\n";
+#endif
         return 2;
     }
 
     auto module_ref = std::make_shared<Module>(std::move(module_or.value()));
     auto register_status = RegisterModuleClasses(vm, module_ref);
     if (!register_status.ok()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
         std::cerr << "register class metadata failed: " << register_status.message() << "\n";
+#endif
         return 3;
     }
 
     auto value_or = vm.ExecuteModule(*module_ref);
     if (!value_or.ok()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
         std::cerr << "runtime failed: ";
         if (value_or.status().vm_error().has_value()) {
             std::cerr << value_or.status().vm_error()->Format() << "\n";
         } else {
             std::cerr << value_or.status().message() << "\n";
         }
+#endif
         return 4;
     }
 

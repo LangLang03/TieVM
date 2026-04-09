@@ -9,6 +9,18 @@ add_rules("mode.debug", "mode.release")
 add_requires("gtest 1.14.0")
 add_requires("zlib")
 
+option("cli_help")
+    set_default(true)
+    set_showmenu(true)
+    set_description("Compile CLI help/usage text")
+option_end()
+
+option("minimal_strings")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Strip user-facing strings from tievm runtime CLIs")
+option_end()
+
 if is_mode("sanitize") then
     set_symbols("debug")
     set_optimize("none")
@@ -49,6 +61,12 @@ target("tievm_std_native")
 target("tievm")
     set_kind("binary")
     add_includedirs("include")
+    if has_config("cli_help") then
+        add_defines("TIEVM_ENABLE_HELP=1")
+    end
+    if has_config("minimal_strings") then
+        add_defines("TIEVM_MINIMAL_STRINGS=1")
+    end
     add_files(
         "src/cli/tievm_main.cpp",
         "src/cli/tievm_dispatch.cpp",
@@ -60,6 +78,9 @@ target("tievm")
 target("tiebc")
     set_kind("binary")
     add_includedirs("include")
+    if has_config("cli_help") then
+        add_defines("TIEVM_ENABLE_HELP=1")
+    end
     add_files(
         "src/cli/tiebc_main.cpp",
         "src/cli/tiebc_disasm.cpp",
@@ -82,3 +103,31 @@ target("tievm_perf")
     add_files("benchmarks/tievm_perf.cpp")
     add_deps("tievm_core")
     set_targetdir("artifacts/perf")
+
+target("tievm_embed")
+    set_kind("binary")
+    add_includedirs("include")
+    if has_config("cli_help") then
+        add_defines("TIEVM_ENABLE_HELP=1")
+    end
+    if has_config("minimal_strings") then
+        add_defines("TIEVM_MINIMAL_STRINGS=1")
+    end
+    add_files("examples/embed_vm.cpp")
+    add_deps("tievm_core")
+    set_rundir("$(projectdir)")
+
+target("tievm_vmp_auth")
+    set_kind("binary")
+    add_includedirs("include")
+    add_files("examples/vmp_auth.cpp")
+    add_deps("tievm_core")
+    set_rundir("$(projectdir)")
+    if is_mode("release") then
+        set_symbols("none")
+        if not is_plat("windows") then
+            set_strip("all")
+        else
+            add_ldflags("/DEBUG:NONE", {force = true})
+        end
+    end

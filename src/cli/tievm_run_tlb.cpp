@@ -65,7 +65,9 @@ int RunTlbFile(
     if (input.extension() == ".tlbs") {
         auto bundle_or = TlbsBundle::Deserialize(input);
         if (!bundle_or.ok()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
             std::cerr << "bundle load failed: " << bundle_or.status().message() << "\n";
+#endif
             return 4;
         }
         manifest_entry_module = bundle_or.value().manifest().entry_module;
@@ -74,7 +76,9 @@ int RunTlbFile(
         status = vm.loader().LoadTlbFile(input);
     }
     if (!status.ok()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
         std::cerr << "bundle load failed: " << status.message() << "\n";
+#endif
         return 4;
     }
 
@@ -91,7 +95,9 @@ int RunTlbFile(
         }
         auto names = vm.loader().ActiveModuleNames();
         if (names.empty()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
             std::cerr << "bundle has no module\n";
+#endif
             return 5;
         }
         if (!module_name.empty()) {
@@ -108,24 +114,30 @@ int RunTlbFile(
 
     auto module_or = vm.loader().GetModule(module_name);
     if (!module_or.ok()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
         std::cerr << "module load failed: " << module_or.status().message() << "\n";
+#endif
         return 6;
     }
     auto module_ref = std::make_shared<Module>(std::move(module_or.value()));
     auto register_status = RegisterModuleClasses(vm, module_ref);
     if (!register_status.ok()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
         std::cerr << "register class metadata failed: " << register_status.message() << "\n";
+#endif
         return 6;
     }
 
     auto value_or = vm.ExecuteLoadedModule(module_name);
     if (!value_or.ok()) {
+#if !defined(TIEVM_MINIMAL_STRINGS)
         std::cerr << "runtime failed: ";
         if (value_or.status().vm_error().has_value()) {
             std::cerr << value_or.status().vm_error()->Format() << "\n";
         } else {
             std::cerr << value_or.status().message() << "\n";
         }
+#endif
         return 6;
     }
     std::cout << value_or.value().ToString() << "\n";

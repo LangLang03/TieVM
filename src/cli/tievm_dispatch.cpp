@@ -12,10 +12,12 @@ namespace tie::vm::cli {
 namespace {
 
 int PrintUsage() {
+#if defined(TIEVM_ENABLE_HELP) && !defined(TIEVM_MINIMAL_STRINGS)
     std::cerr << "Usage:\n";
     std::cerr << "  tievm run <file.tbc> [--validate]\n";
     std::cerr << "  tievm run <file.tlb> [module_name] [--validate]\n";
     std::cerr << "  tievm run <file.tlbs> [module_name] [--validate]\n";
+#endif
     return 1;
 }
 
@@ -41,7 +43,9 @@ int RunTievm(int argc, char** argv) {
             module_name_override = arg;
             continue;
         }
+#if !defined(TIEVM_MINIMAL_STRINGS)
         std::cerr << "unknown argument: " << arg << "\n";
+#endif
         return PrintUsage();
     }
 
@@ -55,7 +59,9 @@ int RunTievm(int argc, char** argv) {
         return RunTlbFile(vm, input, module_name_override);
     }
 
+#if !defined(TIEVM_MINIMAL_STRINGS)
     std::cerr << "unsupported file extension: " << input.extension().string() << "\n";
+#endif
     return 7;
 }
 
