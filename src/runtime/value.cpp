@@ -49,6 +49,13 @@ Value Value::String(uint64_t string_handle) {
     return value;
 }
 
+Value Value::Closure(uint64_t closure_handle) {
+    Value value;
+    value.type_ = Type::kClosure;
+    value.bits_ = closure_handle;
+    return value;
+}
+
 bool Value::IsTruthy() const {
     switch (type_) {
         case Type::kNull:
@@ -108,6 +115,13 @@ uint64_t Value::AsStringHandle() const {
     return bits_;
 }
 
+uint64_t Value::AsClosureHandle() const {
+    if (type_ != Type::kClosure) {
+        throw std::runtime_error("value is not closure");
+    }
+    return bits_;
+}
+
 std::string Value::ToString() const {
     switch (type_) {
         case Type::kNull:
@@ -124,6 +138,8 @@ std::string Value::ToString() const {
             return "ptr#" + std::to_string(bits_);
         case Type::kString:
             return "str#" + std::to_string(bits_);
+        case Type::kClosure:
+            return "closure#" + std::to_string(bits_);
     }
     return "unknown";
 }

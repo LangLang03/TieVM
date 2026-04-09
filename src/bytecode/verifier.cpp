@@ -11,7 +11,9 @@ bool IsControlFlow(OpCode opcode) {
     return opcode == OpCode::kJmp || opcode == OpCode::kJmpIf || opcode == OpCode::kRet ||
            opcode == OpCode::kThrow || opcode == OpCode::kHalt ||
            opcode == OpCode::kJmpIfZero || opcode == OpCode::kJmpIfNotZero ||
-           opcode == OpCode::kDecJnz;
+           opcode == OpCode::kDecJnz || opcode == OpCode::kAddDecJnz ||
+           opcode == OpCode::kSubImmJnz || opcode == OpCode::kAddImmJnz ||
+           opcode == OpCode::kTailCall || opcode == OpCode::kTailCallClosure;
 }
 
 }  // namespace
@@ -53,6 +55,50 @@ VerificationResult Verifier::Verify(const Module& module) {
         }
     }
 
+    std::unordered_set<std::string> class_names;
+    for (const auto& class_decl : module.classes()) {
+        if (class_decl.name.empty()) {
+            result.status = Status::VerificationFailed("class name cannot be empty");
+            return result;
+        }
+        if (!class_names.insert(class_decl.name).second) {
+            result.status = Status::VerificationFailed("duplicate class name in metadata");
+            return result;
+        }
+    }
+    for (const auto& class_decl : module.classes()) {
+        for (const auto& base_name : class_decl.base_classes) {
+            if (!class_names.contains(base_name)) {
+                result.status = Status::VerificationFailed(
+                    "class base not found in metadata: " + base_name);
+                return result;
+            }
+        }
+        std::unordered_set<std::string> method_names;
+        for (const auto& method : class_decl.methods) {
+            if (method.name.empty()) {
+                result.status = Status::VerificationFailed("class method name cannot be empty");
+                return result;
+            }
+            if (!method_names.insert(method.name).second) {
+                result.status = Status::VerificationFailed(
+                    "duplicate class method name in metadata");
+                return result;
+            }
+            if (method.function_index >= module.functions().size()) {
+                result.status = Status::VerificationFailed(
+                    "class method function index out of range");
+                return result;
+            }
+            const auto& method_fn = module.functions()[method.function_index];
+            if (!method_fn.is_vararg() && method_fn.param_count() == 0) {
+                result.status = Status::VerificationFailed(
+                    "class method function must accept at least self param");
+                return result;
+            }
+        }
+    }
+
     for (size_t fn_idx = 0; fn_idx < module.functions().size(); ++fn_idx) {
         const auto& function = module.functions()[fn_idx];
         if (function.ffi_binding().enabled) {
@@ -69,6 +115,10 @@ VerificationResult Verifier::Verify(const Module& module) {
         }
         if (function.reg_count() == 0) {
             result.status = Status::VerificationFailed("function has zero register count");
+            return result;
+        }
+        if (function.param_count() > function.reg_count()) {
+            result.status = Status::VerificationFailed("function param_count exceeds reg_count");
             return result;
         }
         const auto instructions = function.FlattenedInstructions();
@@ -106,6 +156,12 @@ VerificationResult Verifier::Verify(const Module& module) {
                 case OpCode::kMul:
                 case OpCode::kDiv:
                 case OpCode::kCmpEq:
+                case OpCode::kBitAnd:
+                case OpCode::kBitOr:
+                case OpCode::kBitXor:
+                case OpCode::kBitShl:
+                case OpCode::kBitShr:
+                case OpCode::kStrConcat:
                     if (!ensure_reg(inst.a) || !ensure_reg(inst.b) || !ensure_reg(inst.c)) {
                         result.status =
                             Status::VerificationFailed("register out of range for arithmetic");
@@ -117,6 +173,22 @@ VerificationResult Verifier::Verify(const Module& module) {
                     if (!ensure_reg(inst.a) || !ensure_reg(inst.b)) {
                         result.status =
                             Status::VerificationFailed("register out of range for imm arithmetic");
+                        return result;
+                    }
+                    break;
+                case OpCode::kInc:
+                case OpCode::kDec:
+                case OpCode::kStrLen:
+                case OpCode::kBitNot:
+                    if (!ensure_reg(inst.a)) {
+                        result.status =
+                            Status::VerificationFailed("register out of range for inc/dec");
+                        return result;
+                    }
+                    if ((inst.opcode == OpCode::kStrLen || inst.opcode == OpCode::kBitNot) &&
+                        !ensure_reg(inst.b)) {
+                        result.status =
+                            Status::VerificationFailed("register out of range for unary op");
                         return result;
                     }
                     break;
@@ -180,7 +252,39 @@ VerificationResult Verifier::Verify(const Module& module) {
                     }
                     break;
                 }
+                case OpCode::kAddDecJnz: {
+                    if (!ensure_reg(inst.a) || !ensure_reg(inst.b)) {
+                        result.status = Status::VerificationFailed(
+                            "add_dec_jnz register out of range");
+                        return result;
+                    }
+                    const int32_t delta = static_cast<int32_t>(inst.c);
+                    const int64_t next = static_cast<int64_t>(i) + delta;
+                    if (next < 0 || next >= static_cast<int64_t>(instructions.size())) {
+                        result.status = Status::VerificationFailed(
+                            "add_dec_jnz target out of range");
+                        return result;
+                    }
+                    break;
+                }
+                case OpCode::kSubImmJnz:
+                case OpCode::kAddImmJnz: {
+                    if (!ensure_reg(inst.a)) {
+                        result.status =
+                            Status::VerificationFailed("imm_jnz register out of range");
+                        return result;
+                    }
+                    const int32_t delta = static_cast<int32_t>(inst.c);
+                    const int64_t next = static_cast<int64_t>(i) + delta;
+                    if (next < 0 || next >= static_cast<int64_t>(instructions.size())) {
+                        result.status =
+                            Status::VerificationFailed("imm_jnz target out of range");
+                        return result;
+                    }
+                    break;
+                }
                 case OpCode::kCall:
+                case OpCode::kTailCall: {
                     if (inst.b >= module.functions().size()) {
                         result.status =
                             Status::VerificationFailed("call target function index out of range");
@@ -191,9 +295,24 @@ VerificationResult Verifier::Verify(const Module& module) {
                             Status::VerificationFailed("call register window out of range");
                         return result;
                     }
-                    if (module.functions()[inst.b].param_count() != inst.c) {
+                    const auto& callee = module.functions()[inst.b];
+                    if (!callee.is_vararg() && callee.param_count() != inst.c) {
                         result.status =
                             Status::VerificationFailed("call argument count mismatch");
+                        return result;
+                    }
+                    if (callee.is_vararg() && inst.c < callee.param_count()) {
+                        result.status = Status::VerificationFailed(
+                            "call argument count less than fixed params for vararg callee");
+                        return result;
+                    }
+                    break;
+                }
+                case OpCode::kCallClosure:
+                case OpCode::kTailCallClosure:
+                    if (!ensure_reg(inst.b) || !ensure_arg_window(inst.a, inst.c)) {
+                        result.status = Status::VerificationFailed(
+                            "call_closure register window out of range");
                         return result;
                     }
                     break;
@@ -216,6 +335,51 @@ VerificationResult Verifier::Verify(const Module& module) {
                                 "ffi_call symbol missing from ffi binding table");
                             return result;
                         }
+                    }
+                    break;
+                case OpCode::kClosure: {
+                    if (!ensure_reg(inst.a) || inst.b >= module.functions().size()) {
+                        result.status = Status::VerificationFailed(
+                            "closure requires valid dst register and function index");
+                        return result;
+                    }
+                    const uint32_t upvalue_count = inst.flags;
+                    if (upvalue_count > 0 &&
+                        !ensure_arg_window(inst.c, upvalue_count - 1)) {
+                        result.status = Status::VerificationFailed(
+                            "closure upvalue capture window out of range");
+                        return result;
+                    }
+                    if (module.functions()[inst.b].upvalue_count() != upvalue_count) {
+                        result.status = Status::VerificationFailed(
+                            "closure upvalue count mismatch with target function");
+                        return result;
+                    }
+                    break;
+                }
+                case OpCode::kGetUpval:
+                case OpCode::kSetUpval:
+                    if (!ensure_reg(inst.a)) {
+                        result.status = Status::VerificationFailed(
+                            "upvalue instruction register out of range");
+                        return result;
+                    }
+                    if (inst.b >= function.upvalue_count()) {
+                        result.status = Status::VerificationFailed(
+                            "upvalue index out of range");
+                        return result;
+                    }
+                    break;
+                case OpCode::kVarArg:
+                    if (!function.is_vararg()) {
+                        result.status = Status::VerificationFailed(
+                            "vararg instruction requires vararg function");
+                        return result;
+                    }
+                    if (inst.c > 0 && !ensure_arg_window(inst.a, inst.c - 1)) {
+                        result.status = Status::VerificationFailed(
+                            "vararg destination window out of range");
+                        return result;
                     }
                     break;
                 case OpCode::kNewObject:

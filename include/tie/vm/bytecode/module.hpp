@@ -52,6 +52,25 @@ struct DebugLineEntry {
     uint32_t column = 0;
 };
 
+enum class BytecodeAccessModifier : uint8_t {
+    kPublic = 0,
+    kProtected = 1,
+    kPrivate = 2,
+};
+
+struct BytecodeMethodDecl {
+    std::string name;
+    uint32_t function_index = 0;
+    BytecodeAccessModifier access = BytecodeAccessModifier::kPublic;
+    bool is_virtual = true;
+};
+
+struct BytecodeClassDecl {
+    std::string name;
+    std::vector<std::string> base_classes;
+    std::vector<BytecodeMethodDecl> methods;
+};
+
 class BasicBlock {
   public:
     explicit BasicBlock(std::string name) : name_(std::move(name)) {}
@@ -70,8 +89,14 @@ class BasicBlock {
 
 class Function {
   public:
-    Function(std::string name, uint16_t reg_count, uint16_t param_count)
-        : name_(std::move(name)), reg_count_(reg_count), param_count_(param_count) {}
+    Function(
+        std::string name, uint16_t reg_count, uint16_t param_count,
+        uint16_t upvalue_count = 0, bool is_vararg = false)
+        : name_(std::move(name)),
+          reg_count_(reg_count),
+          param_count_(param_count),
+          upvalue_count_(upvalue_count),
+          is_vararg_(is_vararg) {}
 
     BasicBlock& AddBlock(std::string name);
     [[nodiscard]] std::vector<Instruction> FlattenedInstructions() const;
@@ -79,6 +104,10 @@ class Function {
     [[nodiscard]] const std::string& name() const { return name_; }
     [[nodiscard]] uint16_t reg_count() const { return reg_count_; }
     [[nodiscard]] uint16_t param_count() const { return param_count_; }
+    [[nodiscard]] uint16_t upvalue_count() const { return upvalue_count_; }
+    [[nodiscard]] bool is_vararg() const { return is_vararg_; }
+    void set_upvalue_count(uint16_t upvalue_count) { upvalue_count_ = upvalue_count; }
+    void set_is_vararg(bool is_vararg) { is_vararg_ = is_vararg; }
     [[nodiscard]] const std::vector<BasicBlock>& blocks() const { return blocks_; }
     [[nodiscard]] std::vector<BasicBlock>& blocks() { return blocks_; }
     [[nodiscard]] const FunctionFfiBindingHeader& ffi_binding() const {
@@ -90,6 +119,8 @@ class Function {
     std::string name_;
     uint16_t reg_count_ = 0;
     uint16_t param_count_ = 0;
+    uint16_t upvalue_count_ = 0;
+    bool is_vararg_ = false;
     std::vector<BasicBlock> blocks_;
     FunctionFfiBindingHeader ffi_binding_;
 };
@@ -98,13 +129,16 @@ class Module {
   public:
     explicit Module(std::string name) : name_(std::move(name)) {}
 
-    Function& AddFunction(std::string name, uint16_t reg_count, uint16_t param_count);
+    Function& AddFunction(
+        std::string name, uint16_t reg_count, uint16_t param_count,
+        uint16_t upvalue_count = 0, bool is_vararg = false);
     uint32_t AddConstant(Constant constant);
     void AddDebugLine(DebugLineEntry entry);
     uint32_t AddFfiLibraryPath(std::string path);
     uint32_t AddFfiStruct(FfiStructLayout layout);
     uint32_t AddFfiSignature(FunctionSignature signature);
     uint32_t AddFfiBinding(FfiSymbolBinding binding);
+    uint32_t AddClass(BytecodeClassDecl class_decl);
 
     [[nodiscard]] const std::string& name() const { return name_; }
     [[nodiscard]] const SemanticVersion& version() const { return version_; }
@@ -135,6 +169,8 @@ class Module {
         return ffi_bindings_;
     }
     [[nodiscard]] std::vector<FfiSymbolBinding>& ffi_bindings() { return ffi_bindings_; }
+    [[nodiscard]] const std::vector<BytecodeClassDecl>& classes() const { return classes_; }
+    [[nodiscard]] std::vector<BytecodeClassDecl>& classes() { return classes_; }
     [[nodiscard]] uint32_t entry_function() const { return entry_function_; }
 
     void set_entry_function(uint32_t idx) { entry_function_ = idx; }
@@ -149,6 +185,7 @@ class Module {
     std::vector<FfiStructLayout> ffi_structs_;
     std::vector<FunctionSignature> ffi_signatures_;
     std::vector<FfiSymbolBinding> ffi_bindings_;
+    std::vector<BytecodeClassDecl> classes_;
     uint32_t entry_function_ = 0;
 };
 

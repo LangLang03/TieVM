@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <atomic>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -37,6 +38,7 @@ class VmInstance {
 
     [[nodiscard]] StatusOr<Value> InternString(const std::string& value);
     [[nodiscard]] StatusOr<std::string> ResolveString(const Value& value) const;
+    [[nodiscard]] StatusOr<const std::string*> ResolveStringPtr(const Value& value) const;
 
     [[nodiscard]] StatusOr<Value> CreateArray();
     [[nodiscard]] StatusOr<int64_t> ArrayPush(Value array_handle, Value element);
@@ -50,6 +52,10 @@ class VmInstance {
 
     void SetOutputSink(OutputSink sink);
     void EmitOutputLine(const std::string& text) const;
+    void SetRuntimeValidationEnabled(bool enabled);
+    [[nodiscard]] bool runtime_validation_enabled() const {
+        return runtime_validation_enabled_.load(std::memory_order_relaxed);
+    }
 
     [[nodiscard]] FfiBridge& ffi() { return ffi_; }
     [[nodiscard]] const FfiBridge& ffi() const { return ffi_; }
@@ -73,6 +79,7 @@ class VmInstance {
     std::unordered_map<uint64_t, std::vector<Value>> arrays_;
     std::unordered_map<uint64_t, std::unordered_map<std::string, Value>> maps_;
     OutputSink output_sink_;
+    std::atomic<bool> runtime_validation_enabled_{false};
 
     ObjectModel object_model_;
     ReflectionRegistry reflection_;

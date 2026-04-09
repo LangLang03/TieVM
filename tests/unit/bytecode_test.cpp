@@ -84,6 +84,25 @@ TEST(BytecodeTest, FastLoopDecJnzExecutesCorrectly) {
     EXPECT_EQ(result_or.value().AsInt64(), 5050);
 }
 
+TEST(BytecodeTest, FastLoopAddDecJnzExecutesCorrectly) {
+    Module module("fast.add_decjnz");
+    const auto c_zero = module.AddConstant(Constant::Int64(0));
+    const auto c_n = module.AddConstant(Constant::Int64(100));
+    auto& fn = module.AddFunction("entry", 4, 0);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb)
+        .LoadK(0, c_zero)
+        .LoadK(1, c_n)
+        .AddDecJnz(0, 1, 0)
+        .Ret(0);
+    module.set_entry_function(0);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 5050);
+}
+
 TEST(BytecodeTest, ImmArithmeticAndZeroBranchesWork) {
     Module module("fast.imm");
     const auto c_ten = module.AddConstant(Constant::Int64(10));
@@ -104,6 +123,209 @@ TEST(BytecodeTest, ImmArithmeticAndZeroBranchesWork) {
     auto result_or = vm.ExecuteModule(module);
     ASSERT_TRUE(result_or.ok()) << result_or.status().message();
     EXPECT_EQ(result_or.value().AsInt64(), 13);
+}
+
+TEST(BytecodeTest, IncDecAndSubImmJnzWork) {
+    Module module("fast.inc_dec_sub_imm_jnz");
+    const auto c_zero = module.AddConstant(Constant::Int64(0));
+    const auto c_five = module.AddConstant(Constant::Int64(5));
+    auto& fn = module.AddFunction("entry", 4, 0);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb)
+        .LoadK(0, c_five)
+        .LoadK(1, c_zero)
+        .Inc(1)
+        .SubImmJnz(0, 1, -1)
+        .Dec(1)
+        .Inc(1)
+        .Ret(1);
+    module.set_entry_function(0);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 5);
+}
+
+TEST(BytecodeTest, AddImmJnzWorks) {
+    Module module("fast.add_imm_jnz");
+    const auto c_zero = module.AddConstant(Constant::Int64(0));
+    const auto c_neg_five = module.AddConstant(Constant::Int64(-5));
+    auto& fn = module.AddFunction("entry", 4, 0);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb)
+        .LoadK(0, c_neg_five)
+        .LoadK(1, c_zero)
+        .Inc(1)
+        .AddImmJnz(0, 1, -1)
+        .Ret(1);
+    module.set_entry_function(0);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 5);
+}
+
+TEST(BytecodeTest, ClosureUpvalueAndCallClosureWork) {
+    Module module("closure.upvalue");
+    const auto c_40 = module.AddConstant(Constant::Int64(40));
+    const auto c_2 = module.AddConstant(Constant::Int64(2));
+
+    auto& adder = module.AddFunction("adder", 4, 1, 1, false);
+    auto& adder_bb = adder.AddBlock("entry");
+    InstructionBuilder(adder_bb).GetUpval(1, 0).Add(0, 0, 1).Ret(0);
+
+    auto& entry = module.AddFunction("entry", 8, 0);
+    auto& entry_bb = entry.AddBlock("entry");
+    InstructionBuilder(entry_bb)
+        .LoadK(1, c_40)
+        .Closure(0, 0, 1, 1)
+        .LoadK(2, c_2)
+        .CallClosure(1, 0, 1)
+        .Ret(1);
+    module.set_entry_function(1);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 42);
+}
+
+TEST(BytecodeTest, VarArgAndTailCallWork) {
+    Module module("call.protocol");
+    const auto c_1 = module.AddConstant(Constant::Int64(1));
+    const auto c_20 = module.AddConstant(Constant::Int64(20));
+    const auto c_22 = module.AddConstant(Constant::Int64(22));
+    const auto c_41 = module.AddConstant(Constant::Int64(41));
+
+    auto& plus_one = module.AddFunction("plus_one", 4, 1);
+    auto& plus_one_bb = plus_one.AddBlock("entry");
+    InstructionBuilder(plus_one_bb).LoadK(1, c_1).Add(0, 0, 1).Ret(0);
+
+    auto& wrapper = module.AddFunction("wrapper", 4, 1);
+    auto& wrapper_bb = wrapper.AddBlock("entry");
+    InstructionBuilder(wrapper_bb).Mov(1, 0).TailCall(0, 0, 1);
+
+    auto& var_sum = module.AddFunction("var_sum", 8, 0, 0, true);
+    auto& var_sum_bb = var_sum.AddBlock("entry");
+    InstructionBuilder(var_sum_bb).VarArg(0, 0, 1).VarArg(1, 1, 1).Add(0, 0, 1).Ret(0);
+
+    auto& entry = module.AddFunction("entry", 10, 0);
+    auto& entry_bb = entry.AddBlock("entry");
+    InstructionBuilder(entry_bb)
+        .LoadK(1, c_41)
+        .Call(0, 1, 1)
+        .LoadK(4, c_20)
+        .LoadK(5, c_22)
+        .Call(3, 2, 2)
+        .Add(0, 0, 3)
+        .Ret(0);
+    module.set_entry_function(3);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 84);
+}
+
+TEST(BytecodeTest, StringAndBitFastInstructionsWork) {
+    Module module("fast.string.bit");
+    const auto c_hello = module.AddConstant(Constant::Utf8("hello "));
+    const auto c_world = module.AddConstant(Constant::Utf8("world"));
+    const auto c_6 = module.AddConstant(Constant::Int64(6));
+    const auto c_3 = module.AddConstant(Constant::Int64(3));
+    const auto c_8 = module.AddConstant(Constant::Int64(8));
+    const auto c_1 = module.AddConstant(Constant::Int64(1));
+
+    auto& fn = module.AddFunction("entry", 16, 0);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb)
+        .LoadK(1, c_hello)
+        .LoadK(2, c_world)
+        .StrConcat(0, 1, 2)
+        .StrLen(3, 0)
+        .LoadK(4, c_6)
+        .LoadK(5, c_3)
+        .BitAnd(6, 4, 5)
+        .LoadK(7, c_8)
+        .LoadK(8, c_1)
+        .BitXor(9, 7, 8)
+        .BitOr(10, 6, 9)
+        .BitNot(10, 10)
+        .BitShl(10, 10, 8)
+        .BitShr(10, 10, 8)
+        .Add(0, 3, 10)
+        .Ret(0);
+    module.set_entry_function(0);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), -1);
+}
+
+TEST(BytecodeTest, SerializeDeserializeClosureVarArgHeadersRoundTrip) {
+    Module module("closure.vararg.header");
+    auto& captured = module.AddFunction("captured", 4, 1, 2, false);
+    auto& captured_bb = captured.AddBlock("entry");
+    InstructionBuilder(captured_bb).Ret(0);
+    auto& variadic = module.AddFunction("variadic", 6, 1, 0, true);
+    auto& variadic_bb = variadic.AddBlock("entry");
+    InstructionBuilder(variadic_bb).Ret(0);
+    module.set_entry_function(0);
+
+    auto bytes_or = Serializer::Serialize(module, false);
+    ASSERT_TRUE(bytes_or.ok()) << bytes_or.status().message();
+    auto parsed_or = Serializer::Deserialize(bytes_or.value());
+    ASSERT_TRUE(parsed_or.ok()) << parsed_or.status().message();
+
+    ASSERT_EQ(parsed_or.value().functions().size(), 2u);
+    EXPECT_EQ(parsed_or.value().functions()[0].upvalue_count(), 2u);
+    EXPECT_FALSE(parsed_or.value().functions()[0].is_vararg());
+    EXPECT_EQ(parsed_or.value().functions()[1].upvalue_count(), 0u);
+    EXPECT_TRUE(parsed_or.value().functions()[1].is_vararg());
+}
+
+TEST(BytecodeTest, SerializeDeserializeClassMetadataRoundTrip) {
+    Module module("class.meta");
+    auto& plus1_fn = module.AddFunction("plus1_impl", 4, 2);
+    auto& plus1_bb = plus1_fn.AddBlock("entry");
+    InstructionBuilder(plus1_bb).AddImm(0, 1, 1).Ret(0);
+
+    BytecodeClassDecl demo_class;
+    demo_class.name = "DemoMath";
+    demo_class.methods.push_back(BytecodeMethodDecl{
+        "plus1",
+        0,
+        BytecodeAccessModifier::kPublic,
+        true,
+    });
+    module.AddClass(std::move(demo_class));
+    module.set_entry_function(0);
+
+    auto bytes_or = Serializer::Serialize(module, false);
+    ASSERT_TRUE(bytes_or.ok()) << bytes_or.status().message();
+    auto parsed_or = Serializer::Deserialize(bytes_or.value());
+    ASSERT_TRUE(parsed_or.ok()) << parsed_or.status().message();
+    ASSERT_EQ(parsed_or.value().classes().size(), 1u);
+    EXPECT_EQ(parsed_or.value().classes()[0].name, "DemoMath");
+    ASSERT_EQ(parsed_or.value().classes()[0].methods.size(), 1u);
+    EXPECT_EQ(parsed_or.value().classes()[0].methods[0].name, "plus1");
+    EXPECT_EQ(parsed_or.value().classes()[0].methods[0].function_index, 0u);
+}
+
+TEST(BytecodeTest, RuntimeValidationRejectsInvalidRegisterAccess) {
+    Module module("runtime.invalid.reg");
+    auto& fn = module.AddFunction("entry", 1, 0);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb).Add(0, 0, 2).Ret(0);
+    module.set_entry_function(0);
+
+    VmInstance vm;
+    vm.SetRuntimeValidationEnabled(true);
+    auto result_or = vm.ExecuteModule(module);
+    EXPECT_FALSE(result_or.ok());
 }
 
 TEST(BytecodeTest, SerializeDeserializeFfiMetadataRoundTrip) {

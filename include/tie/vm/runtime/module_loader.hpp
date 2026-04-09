@@ -34,7 +34,9 @@ class ModuleLoader {
     Status LoadTlbsFile(const std::filesystem::path& path);
 
     [[nodiscard]] StatusOr<Module> GetModule(const std::string& name) const;
+    [[nodiscard]] StatusOr<const Module*> GetModulePtr(const std::string& name) const;
     [[nodiscard]] std::optional<Module> FindModuleByFfiSymbol(std::string_view symbol) const;
+    [[nodiscard]] const Module* FindModuleByFfiSymbolPtr(std::string_view symbol) const;
     [[nodiscard]] std::vector<std::string> ActiveModuleNames() const;
 
     [[nodiscard]] HotReloadSession BeginHotReload();

@@ -83,6 +83,118 @@ InstructionBuilder& InstructionBuilder::DecJnz(uint32_t reg, int32_t offset) {
     return *this;
 }
 
+InstructionBuilder& InstructionBuilder::AddDecJnz(
+    uint32_t acc_reg, uint32_t counter_reg, int32_t offset) {
+    block_->Append(MakeInstruction(
+        OpCode::kAddDecJnz, acc_reg, counter_reg, static_cast<uint32_t>(offset)));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::Inc(uint32_t reg) {
+    block_->Append(MakeInstruction(OpCode::kInc, reg, 0, 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::Dec(uint32_t reg) {
+    block_->Append(MakeInstruction(OpCode::kDec, reg, 0, 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::SubImmJnz(uint32_t reg, int32_t imm, int32_t offset) {
+    block_->Append(MakeInstruction(
+        OpCode::kSubImmJnz, reg, static_cast<uint32_t>(imm), static_cast<uint32_t>(offset)));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::AddImmJnz(uint32_t reg, int32_t imm, int32_t offset) {
+    block_->Append(MakeInstruction(
+        OpCode::kAddImmJnz, reg, static_cast<uint32_t>(imm), static_cast<uint32_t>(offset)));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::Closure(
+    uint32_t dst, uint32_t function_index, uint32_t first_upvalue_reg,
+    uint8_t upvalue_count) {
+    block_->Append(MakeInstruction(
+        OpCode::kClosure, dst, function_index, first_upvalue_reg, upvalue_count));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::GetUpval(uint32_t dst, uint32_t upvalue_index) {
+    block_->Append(MakeInstruction(OpCode::kGetUpval, dst, upvalue_index, 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::SetUpval(uint32_t src, uint32_t upvalue_index) {
+    block_->Append(MakeInstruction(OpCode::kSetUpval, src, upvalue_index, 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::CallClosure(
+    uint32_t ret_reg, uint32_t closure_reg, uint32_t arg_count) {
+    block_->Append(MakeInstruction(OpCode::kCallClosure, ret_reg, closure_reg, arg_count));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::TailCall(
+    uint32_t ret_reg, uint32_t function_index, uint32_t arg_count) {
+    block_->Append(MakeInstruction(OpCode::kTailCall, ret_reg, function_index, arg_count));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::TailCallClosure(
+    uint32_t ret_reg, uint32_t closure_reg, uint32_t arg_count) {
+    block_->Append(
+        MakeInstruction(OpCode::kTailCallClosure, ret_reg, closure_reg, arg_count));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::VarArg(
+    uint32_t dst, uint32_t vararg_start, uint32_t count) {
+    block_->Append(MakeInstruction(OpCode::kVarArg, dst, vararg_start, count));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::StrLen(uint32_t dst, uint32_t src) {
+    block_->Append(MakeInstruction(OpCode::kStrLen, dst, src, 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::StrConcat(uint32_t dst, uint32_t lhs, uint32_t rhs) {
+    block_->Append(MakeInstruction(OpCode::kStrConcat, dst, lhs, rhs));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::BitAnd(uint32_t dst, uint32_t lhs, uint32_t rhs) {
+    block_->Append(MakeInstruction(OpCode::kBitAnd, dst, lhs, rhs));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::BitOr(uint32_t dst, uint32_t lhs, uint32_t rhs) {
+    block_->Append(MakeInstruction(OpCode::kBitOr, dst, lhs, rhs));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::BitXor(uint32_t dst, uint32_t lhs, uint32_t rhs) {
+    block_->Append(MakeInstruction(OpCode::kBitXor, dst, lhs, rhs));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::BitNot(uint32_t dst, uint32_t src) {
+    block_->Append(MakeInstruction(OpCode::kBitNot, dst, src, 0));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::BitShl(uint32_t dst, uint32_t lhs, uint32_t rhs) {
+    block_->Append(MakeInstruction(OpCode::kBitShl, dst, lhs, rhs));
+    return *this;
+}
+
+InstructionBuilder& InstructionBuilder::BitShr(uint32_t dst, uint32_t lhs, uint32_t rhs) {
+    block_->Append(MakeInstruction(OpCode::kBitShr, dst, lhs, rhs));
+    return *this;
+}
+
 InstructionBuilder& InstructionBuilder::Call(
     uint32_t ret_reg, uint32_t function_index, uint32_t arg_count) {
     block_->Append(MakeInstruction(OpCode::kCall, ret_reg, function_index, arg_count));

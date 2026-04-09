@@ -22,8 +22,11 @@ std::vector<Instruction> Function::FlattenedInstructions() const {
     return flat;
 }
 
-Function& Module::AddFunction(std::string name, uint16_t reg_count, uint16_t param_count) {
-    functions_.emplace_back(std::move(name), reg_count, param_count);
+Function& Module::AddFunction(
+    std::string name, uint16_t reg_count, uint16_t param_count,
+    uint16_t upvalue_count, bool is_vararg) {
+    functions_.emplace_back(
+        std::move(name), reg_count, param_count, upvalue_count, is_vararg);
     return functions_.back();
 }
 
@@ -52,6 +55,11 @@ uint32_t Module::AddFfiSignature(FunctionSignature signature) {
 uint32_t Module::AddFfiBinding(FfiSymbolBinding binding) {
     ffi_bindings_.push_back(std::move(binding));
     return static_cast<uint32_t>(ffi_bindings_.size() - 1);
+}
+
+uint32_t Module::AddClass(BytecodeClassDecl class_decl) {
+    classes_.push_back(std::move(class_decl));
+    return static_cast<uint32_t>(classes_.size() - 1);
 }
 
 }  // namespace tie::vm

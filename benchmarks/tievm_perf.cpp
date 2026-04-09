@@ -91,8 +91,7 @@ int main(int argc, char** argv) {
     tie::vm::InstructionBuilder(bb)
         .LoadK(0, c_zero)
         .LoadK(1, c_n)
-        .Add(0, 0, 1)
-        .DecJnz(1, -1)
+        .AddDecJnz(0, 1, 0)
         .Ret(0);
     module.set_entry_function(0);
 

@@ -17,6 +17,7 @@ class Value {
         kObject = 4,
         kPointer = 5,
         kString = 6,
+        kClosure = 7,
     };
 
     Value() = default;
@@ -28,6 +29,19 @@ class Value {
     static Value Object(ObjectId object_id);
     static Value Pointer(uint64_t ptr_bits);
     static Value String(uint64_t string_handle);
+    static Value Closure(uint64_t closure_handle);
+    static Value Int64Fast(int64_t v) {
+        Value value;
+        value.type_ = Type::kInt64;
+        value.bits_ = static_cast<uint64_t>(v);
+        return value;
+    }
+    static Value BoolFast(bool v) {
+        Value value;
+        value.type_ = Type::kBool;
+        value.bits_ = v ? 1u : 0u;
+        return value;
+    }
 
     [[nodiscard]] Type type() const { return type_; }
     [[nodiscard]] bool IsTruthy() const;
@@ -37,6 +51,8 @@ class Value {
     [[nodiscard]] ObjectId AsObject() const;
     [[nodiscard]] uint64_t AsPointer() const;
     [[nodiscard]] uint64_t AsStringHandle() const;
+    [[nodiscard]] uint64_t AsClosureHandle() const;
+    [[nodiscard]] int64_t AsInt64Fast() const { return static_cast<int64_t>(bits_); }
     [[nodiscard]] std::string ToString() const;
 
     friend bool operator==(const Value& lhs, const Value& rhs);

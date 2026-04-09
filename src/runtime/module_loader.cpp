@@ -126,7 +126,24 @@ StatusOr<Module> ModuleLoader::GetModule(const std::string& name) const {
     return it->second.module;
 }
 
+StatusOr<const Module*> ModuleLoader::GetModulePtr(const std::string& name) const {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = modules_.find(name);
+    if (it == modules_.end()) {
+        return Status::NotFound("module not loaded: " + name);
+    }
+    return &it->second.module;
+}
+
 std::optional<Module> ModuleLoader::FindModuleByFfiSymbol(std::string_view symbol) const {
+    const Module* ptr = FindModuleByFfiSymbolPtr(symbol);
+    if (ptr == nullptr) {
+        return std::nullopt;
+    }
+    return *ptr;
+}
+
+const Module* ModuleLoader::FindModuleByFfiSymbolPtr(std::string_view symbol) const {
     std::lock_guard<std::mutex> lock(mu_);
     const LoadedModule* best = nullptr;
     for (const auto& [name, loaded] : modules_) {
@@ -145,9 +162,9 @@ std::optional<Module> ModuleLoader::FindModuleByFfiSymbol(std::string_view symbo
         }
     }
     if (best == nullptr) {
-        return std::nullopt;
+        return nullptr;
     }
-    return best->module;
+    return &best->module;
 }
 
 std::vector<std::string> ModuleLoader::ActiveModuleNames() const {

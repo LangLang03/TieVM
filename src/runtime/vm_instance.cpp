@@ -23,11 +23,11 @@ StatusOr<Value> VmInstance::ExecuteModule(const Module& module, const std::vecto
 
 StatusOr<Value> VmInstance::ExecuteLoadedModule(
     const std::string& module_name, const std::vector<Value>& args) {
-    auto module_or = loader_.GetModule(module_name);
+    auto module_or = loader_.GetModulePtr(module_name);
     if (!module_or.ok()) {
         return module_or.status();
     }
-    return ExecuteModule(module_or.value(), args);
+    return ExecuteModule(*module_or.value(), args);
 }
 
 VmThread VmInstance::CreateThread() { return VmThread(this); }
@@ -45,6 +45,14 @@ StatusOr<Value> VmInstance::InternString(const std::string& value) {
 }
 
 StatusOr<std::string> VmInstance::ResolveString(const Value& value) const {
+    auto ptr_or = ResolveStringPtr(value);
+    if (!ptr_or.ok()) {
+        return ptr_or.status();
+    }
+    return *ptr_or.value();
+}
+
+StatusOr<const std::string*> VmInstance::ResolveStringPtr(const Value& value) const {
     if (value.type() != Value::Type::kString) {
         return Status::InvalidArgument("value is not utf8 string");
     }
@@ -53,7 +61,7 @@ StatusOr<std::string> VmInstance::ResolveString(const Value& value) const {
     if (it == strings_.end()) {
         return Status::NotFound("string handle not found");
     }
-    return it->second;
+    return &it->second;
 }
 
 StatusOr<Value> VmInstance::CreateArray() {
@@ -169,6 +177,10 @@ void VmInstance::EmitOutputLine(const std::string& text) const {
     if (sink) {
         sink(text);
     }
+}
+
+void VmInstance::SetRuntimeValidationEnabled(bool enabled) {
+    runtime_validation_enabled_.store(enabled, std::memory_order_relaxed);
 }
 
 }  // namespace tie::vm

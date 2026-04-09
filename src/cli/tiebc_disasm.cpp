@@ -141,6 +141,12 @@ std::string FormatInstruction(
             out << Reg(inst.a) << " <- " << Reg(inst.b) << " - "
                 << static_cast<int32_t>(inst.c);
             break;
+        case OpCode::kInc:
+            out << "++" << Reg(inst.a);
+            break;
+        case OpCode::kDec:
+            out << "--" << Reg(inst.a);
+            break;
         case OpCode::kCmpEq:
             out << Reg(inst.a) << " <- (" << Reg(inst.b) << " == " << Reg(inst.c) << ")";
             break;
@@ -174,6 +180,79 @@ std::string FormatInstruction(
                 << FormatTarget(target, code_size);
             break;
         }
+        case OpCode::kAddDecJnz: {
+            const int64_t target = static_cast<int64_t>(pc) + static_cast<int32_t>(inst.c);
+            out << Reg(inst.a) << " += " << Reg(inst.b) << "; --" << Reg(inst.b)
+                << "; jnz " << static_cast<int32_t>(inst.c) << " -> "
+                << FormatTarget(target, code_size);
+            break;
+        }
+        case OpCode::kSubImmJnz: {
+            const int64_t target = static_cast<int64_t>(pc) + static_cast<int32_t>(inst.c);
+            out << Reg(inst.a) << " -= " << static_cast<int32_t>(inst.b)
+                << "; jnz " << static_cast<int32_t>(inst.c) << " -> "
+                << FormatTarget(target, code_size);
+            break;
+        }
+        case OpCode::kAddImmJnz: {
+            const int64_t target = static_cast<int64_t>(pc) + static_cast<int32_t>(inst.c);
+            out << Reg(inst.a) << " += " << static_cast<int32_t>(inst.b)
+                << "; jnz " << static_cast<int32_t>(inst.c) << " -> "
+                << FormatTarget(target, code_size);
+            break;
+        }
+        case OpCode::kClosure:
+            out << Reg(inst.a) << " <- closure func[" << inst.b << "] "
+                << FunctionNameOrFallback(module, inst.b)
+                << " capture_start=" << Reg(inst.c)
+                << " upvalues=" << static_cast<uint32_t>(inst.flags);
+            break;
+        case OpCode::kGetUpval:
+            out << Reg(inst.a) << " <- upval[" << inst.b << "]";
+            break;
+        case OpCode::kSetUpval:
+            out << "upval[" << inst.b << "] <- " << Reg(inst.a);
+            break;
+        case OpCode::kCallClosure:
+            out << Reg(inst.a) << " <- call_closure " << Reg(inst.b) << " "
+                << FormatArgs(inst.a, inst.c);
+            break;
+        case OpCode::kTailCall:
+            out << "tail_call func[" << inst.b << "] "
+                << FunctionNameOrFallback(module, inst.b) << " "
+                << FormatArgs(inst.a, inst.c);
+            break;
+        case OpCode::kTailCallClosure:
+            out << "tail_call_closure " << Reg(inst.b) << " "
+                << FormatArgs(inst.a, inst.c);
+            break;
+        case OpCode::kVarArg:
+            out << "vararg " << Reg(inst.a) << ".. count=" << inst.c << " start=" << inst.b;
+            break;
+        case OpCode::kStrLen:
+            out << Reg(inst.a) << " <- strlen(" << Reg(inst.b) << ")";
+            break;
+        case OpCode::kStrConcat:
+            out << Reg(inst.a) << " <- concat(" << Reg(inst.b) << ", " << Reg(inst.c) << ")";
+            break;
+        case OpCode::kBitAnd:
+            out << Reg(inst.a) << " <- " << Reg(inst.b) << " & " << Reg(inst.c);
+            break;
+        case OpCode::kBitOr:
+            out << Reg(inst.a) << " <- " << Reg(inst.b) << " | " << Reg(inst.c);
+            break;
+        case OpCode::kBitXor:
+            out << Reg(inst.a) << " <- " << Reg(inst.b) << " ^ " << Reg(inst.c);
+            break;
+        case OpCode::kBitNot:
+            out << Reg(inst.a) << " <- ~" << Reg(inst.b);
+            break;
+        case OpCode::kBitShl:
+            out << Reg(inst.a) << " <- " << Reg(inst.b) << " << " << Reg(inst.c);
+            break;
+        case OpCode::kBitShr:
+            out << Reg(inst.a) << " <- " << Reg(inst.b) << " >> " << Reg(inst.c);
+            break;
         case OpCode::kCall:
             out << Reg(inst.a) << " <- call func[" << inst.b << "] "
                 << FunctionNameOrFallback(module, inst.b) << FormatArgs(inst.a, inst.c);
@@ -269,6 +348,36 @@ void PrintFfiMap(const Module& module) {
     }
 }
 
+void PrintClassMap(const Module& module) {
+    std::cout << "class-map:\n";
+    if (module.classes().empty()) {
+        std::cout << "  <none>\n";
+        return;
+    }
+    for (size_t i = 0; i < module.classes().size(); ++i) {
+        const auto& klass = module.classes()[i];
+        std::cout << "  class[" << i << "] " << klass.name;
+        if (!klass.base_classes.empty()) {
+            std::cout << " : ";
+            for (size_t b = 0; b < klass.base_classes.size(); ++b) {
+                if (b > 0) {
+                    std::cout << ", ";
+                }
+                std::cout << klass.base_classes[b];
+            }
+        }
+        std::cout << "\n";
+        for (const auto& method : klass.methods) {
+            std::cout << "    method " << method.name
+                      << " -> func[" << method.function_index << "] "
+                      << FunctionNameOrFallback(module, method.function_index)
+                      << " access=" << static_cast<uint32_t>(method.access)
+                      << " virtual=" << (method.is_virtual ? "yes" : "no")
+                      << "\n";
+        }
+    }
+}
+
 }  // namespace
 
 int Check(const std::filesystem::path& path) {
@@ -301,7 +410,10 @@ int DisasmTbc(const std::filesystem::path& path) {
     for (size_t fn_i = 0; fn_i < module.functions().size(); ++fn_i) {
         const auto& fn = module.functions()[fn_i];
         std::cout << "func[" << fn_i << "] " << fn.name() << " regs=" << fn.reg_count()
-                  << " params=" << fn.param_count() << "\n";
+                  << " params=" << fn.param_count()
+                  << " upvalues=" << fn.upvalue_count()
+                  << " vararg=" << (fn.is_vararg() ? "yes" : "no")
+                  << "\n";
         const auto code = fn.FlattenedInstructions();
         for (size_t i = 0; i < code.size(); ++i) {
             const auto& inst = code[i];
@@ -311,6 +423,7 @@ int DisasmTbc(const std::filesystem::path& path) {
         }
     }
     PrintFfiMap(module);
+    PrintClassMap(module);
     return 0;
 }
 

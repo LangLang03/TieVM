@@ -1,5 +1,6 @@
 #include "tie/vm/ffi/ffi_bridge.hpp"
 
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <type_traits>
@@ -55,84 +56,102 @@ void CallVoidMaskedImpl(void* symbol, const AbiScalar* args, std::index_sequence
     fn(ReadAs<ArgByMask<I, Mask>>(args[I])...);
 }
 
-template <typename Ret, size_t N, uint64_t Mask = 0>
-Ret CallByMask(void* symbol, uint64_t runtime_mask, const AbiScalar* args) {
-    if constexpr (Mask < (1ULL << N)) {
-        if (runtime_mask == Mask) {
-            return CallMaskedImpl<Ret, Mask>(symbol, args, std::make_index_sequence<N>{});
-        }
-        return CallByMask<Ret, N, Mask + 1>(symbol, runtime_mask, args);
-    } else {
-        return Ret{};
-    }
+template <typename Ret, size_t N, uint64_t Mask>
+Ret CallMaskedEntry(void* symbol, const AbiScalar* args) {
+    return CallMaskedImpl<Ret, Mask>(symbol, args, std::make_index_sequence<N>{});
 }
 
-template <size_t N, uint64_t Mask = 0>
-void CallVoidByMask(void* symbol, uint64_t runtime_mask, const AbiScalar* args) {
-    if constexpr (Mask < (1ULL << N)) {
-        if (runtime_mask == Mask) {
-            CallVoidMaskedImpl<Mask>(symbol, args, std::make_index_sequence<N>{});
-            return;
-        }
-        return CallVoidByMask<N, Mask + 1>(symbol, runtime_mask, args);
+template <size_t N, uint64_t Mask>
+void CallVoidMaskedEntry(void* symbol, const AbiScalar* args) {
+    CallVoidMaskedImpl<Mask>(symbol, args, std::make_index_sequence<N>{});
+}
+
+template <typename Ret, size_t N, uint64_t... Masks>
+constexpr auto BuildTypedDispatchTable(std::integer_sequence<uint64_t, Masks...>) {
+    using Fn = Ret (*)(void*, const AbiScalar*);
+    return std::array<Fn, sizeof...(Masks)>{
+        &CallMaskedEntry<Ret, N, Masks>...,
+    };
+}
+
+template <size_t N, uint64_t... Masks>
+constexpr auto BuildVoidDispatchTable(std::integer_sequence<uint64_t, Masks...>) {
+    using Fn = void (*)(void*, const AbiScalar*);
+    return std::array<Fn, sizeof...(Masks)>{
+        &CallVoidMaskedEntry<N, Masks>...,
+    };
+}
+
+template <typename Ret, size_t N>
+StatusOr<Ret> DispatchTypedCallN(void* symbol, uint64_t mask, const AbiScalar* args) {
+    constexpr uint64_t kMaskLimit = (1ULL << N);
+    if (mask >= kMaskLimit) {
+        return Status::InvalidArgument("ffi float mask out of range");
     }
+    static constexpr auto kTable = BuildTypedDispatchTable<Ret, N>(
+        std::make_integer_sequence<uint64_t, kMaskLimit>{});
+    return kTable[static_cast<size_t>(mask)](symbol, args);
+}
+
+template <size_t N>
+Status DispatchVoidCallN(void* symbol, uint64_t mask, const AbiScalar* args) {
+    constexpr uint64_t kMaskLimit = (1ULL << N);
+    if (mask >= kMaskLimit) {
+        return Status::InvalidArgument("ffi float mask out of range");
+    }
+    static constexpr auto kTable = BuildVoidDispatchTable<N>(
+        std::make_integer_sequence<uint64_t, kMaskLimit>{});
+    kTable[static_cast<size_t>(mask)](symbol, args);
+    return Status::Ok();
 }
 
 template <typename Ret>
-StatusOr<Ret> DispatchTypedCall(void* symbol, uint64_t mask, const std::vector<AbiScalar>& args) {
-    switch (args.size()) {
+StatusOr<Ret> DispatchTypedCall(
+    void* symbol, uint64_t mask, size_t arg_count, const AbiScalar* args) {
+    switch (arg_count) {
         case 0:
-            return CallByMask<Ret, 0>(symbol, mask, args.data());
+            return DispatchTypedCallN<Ret, 0>(symbol, mask, args);
         case 1:
-            return CallByMask<Ret, 1>(symbol, mask, args.data());
+            return DispatchTypedCallN<Ret, 1>(symbol, mask, args);
         case 2:
-            return CallByMask<Ret, 2>(symbol, mask, args.data());
+            return DispatchTypedCallN<Ret, 2>(symbol, mask, args);
         case 3:
-            return CallByMask<Ret, 3>(symbol, mask, args.data());
+            return DispatchTypedCallN<Ret, 3>(symbol, mask, args);
         case 4:
-            return CallByMask<Ret, 4>(symbol, mask, args.data());
+            return DispatchTypedCallN<Ret, 4>(symbol, mask, args);
         case 5:
-            return CallByMask<Ret, 5>(symbol, mask, args.data());
+            return DispatchTypedCallN<Ret, 5>(symbol, mask, args);
         case 6:
-            return CallByMask<Ret, 6>(symbol, mask, args.data());
+            return DispatchTypedCallN<Ret, 6>(symbol, mask, args);
         case 7:
-            return CallByMask<Ret, 7>(symbol, mask, args.data());
+            return DispatchTypedCallN<Ret, 7>(symbol, mask, args);
         case 8:
-            return CallByMask<Ret, 8>(symbol, mask, args.data());
+            return DispatchTypedCallN<Ret, 8>(symbol, mask, args);
         default:
             return Status::Unsupported("ffi max arity is 8 in current backend");
     }
 }
 
-Status DispatchVoidCall(void* symbol, uint64_t mask, const std::vector<AbiScalar>& args) {
-    switch (args.size()) {
+Status DispatchVoidCall(void* symbol, uint64_t mask, size_t arg_count, const AbiScalar* args) {
+    switch (arg_count) {
         case 0:
-            CallVoidByMask<0>(symbol, mask, args.data());
-            return Status::Ok();
+            return DispatchVoidCallN<0>(symbol, mask, args);
         case 1:
-            CallVoidByMask<1>(symbol, mask, args.data());
-            return Status::Ok();
+            return DispatchVoidCallN<1>(symbol, mask, args);
         case 2:
-            CallVoidByMask<2>(symbol, mask, args.data());
-            return Status::Ok();
+            return DispatchVoidCallN<2>(symbol, mask, args);
         case 3:
-            CallVoidByMask<3>(symbol, mask, args.data());
-            return Status::Ok();
+            return DispatchVoidCallN<3>(symbol, mask, args);
         case 4:
-            CallVoidByMask<4>(symbol, mask, args.data());
-            return Status::Ok();
+            return DispatchVoidCallN<4>(symbol, mask, args);
         case 5:
-            CallVoidByMask<5>(symbol, mask, args.data());
-            return Status::Ok();
+            return DispatchVoidCallN<5>(symbol, mask, args);
         case 6:
-            CallVoidByMask<6>(symbol, mask, args.data());
-            return Status::Ok();
+            return DispatchVoidCallN<6>(symbol, mask, args);
         case 7:
-            CallVoidByMask<7>(symbol, mask, args.data());
-            return Status::Ok();
+            return DispatchVoidCallN<7>(symbol, mask, args);
         case 8:
-            CallVoidByMask<8>(symbol, mask, args.data());
-            return Status::Ok();
+            return DispatchVoidCallN<8>(symbol, mask, args);
         default:
             return Status::Unsupported("ffi max arity is 8 in current backend");
     }
@@ -175,7 +194,7 @@ void* ResolveDynamicSymbol(void* library_handle, const std::string& symbol_name)
 }
 
 StatusOr<uint64_t> ConvertValueToRawInt(
-    VmThread& vm_thread, const AbiType& type, const Value& value, std::vector<std::string>& tmp_strings) {
+    VmThread& vm_thread, const AbiType& type, const Value& value) {
     switch (type.kind) {
         case AbiValueKind::kBool:
             return value.AsBool() ? 1ULL : 0ULL;
@@ -187,6 +206,9 @@ StatusOr<uint64_t> ConvertValueToRawInt(
         case AbiValueKind::kU32:
         case AbiValueKind::kI64:
         case AbiValueKind::kU64:
+            if (value.type() == Value::Type::kInt64) {
+                return static_cast<uint64_t>(value.AsInt64Fast());
+            }
             return static_cast<uint64_t>(value.AsInt64());
         case AbiValueKind::kPointer:
             return value.AsPointer();
@@ -199,12 +221,11 @@ StatusOr<uint64_t> ConvertValueToRawInt(
             if (value.type() != Value::Type::kString) {
                 return Status::InvalidArgument("ffi utf8 parameter requires string handle");
             }
-            auto text_or = vm_thread.owner().ResolveString(value);
+            auto text_or = vm_thread.owner().ResolveStringPtr(value);
             if (!text_or.ok()) {
                 return text_or.status();
             }
-            tmp_strings.push_back(text_or.value());
-            return reinterpret_cast<uint64_t>(tmp_strings.back().c_str());
+            return reinterpret_cast<uint64_t>(text_or.value()->c_str());
         }
         case AbiValueKind::kStruct: {
             if (type.passing != FfiPassingMode::kValue) {
@@ -231,7 +252,7 @@ StatusOr<double> ConvertValueToRawFloat(const Value& value) {
         return value.AsFloat64();
     }
     if (value.type() == Value::Type::kInt64) {
-        return static_cast<double>(value.AsInt64());
+        return static_cast<double>(value.AsInt64Fast());
     }
     return Status::InvalidArgument("ffi float parameter requires float64/int64 value");
 }
@@ -314,6 +335,7 @@ void FfiBridge::CloseAllLibraries() {
     }
     dynamic_lib_handles_.clear();
     dynamic_plan_cache_.clear();
+    dynamic_plan_fast_cache_.clear();
 }
 
 Status FfiBridge::RegisterFunction(FunctionSignature signature, NativeFunction fn) {
@@ -363,6 +385,60 @@ StatusOr<void*> FfiBridge::LoadDynamicSymbol(
 
 StatusOr<FfiBridge::DynamicCallPlan> FfiBridge::ResolveDynamicPlan(
     const Module& module, uint32_t function_index, std::string_view vm_symbol) const {
+    auto build_plan =
+        [&](uint32_t binding_index, std::optional<CallingConvention> expected_convention)
+        -> StatusOr<DynamicCallPlan> {
+        if (binding_index >= module.ffi_bindings().size()) {
+            return Status::InvalidState("ffi binding index out of range");
+        }
+        const auto& binding = module.ffi_bindings()[binding_index];
+        if (binding.library_index >= module.ffi_library_paths().size()) {
+            return Status::InvalidState("ffi library index out of range");
+        }
+        if (binding.signature_index >= module.ffi_signatures().size()) {
+            return Status::InvalidState("ffi signature index out of range");
+        }
+
+        DynamicCallPlan plan;
+        plan.signature = module.ffi_signatures()[binding.signature_index];
+        plan.library_path = module.ffi_library_paths()[binding.library_index];
+        plan.symbol_name = binding.native_symbol;
+        if (expected_convention.has_value() &&
+            expected_convention.value() != plan.signature.convention) {
+            return Status::InvalidState("ffi function header convention mismatch");
+        }
+        auto convention_status = ValidateCallingConvention(plan.signature.convention);
+        if (!convention_status.ok()) {
+            return convention_status;
+        }
+        auto symbol_or = LoadDynamicSymbol(plan.library_path, plan.symbol_name);
+        if (!symbol_or.ok()) {
+            return symbol_or.status();
+        }
+        plan.symbol = symbol_or.value();
+        return plan;
+    };
+
+    if (function_index < module.functions().size() &&
+        module.functions()[function_index].ffi_binding().enabled) {
+        const DynamicPlanFastKey fast_key{&module, function_index};
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto it = dynamic_plan_fast_cache_.find(fast_key);
+            if (it != dynamic_plan_fast_cache_.end()) {
+                return it->second;
+            }
+        }
+        const auto& header = module.functions()[function_index].ffi_binding();
+        auto plan_or = build_plan(header.binding_index, header.convention);
+        if (!plan_or.ok()) {
+            return plan_or.status();
+        }
+        std::lock_guard<std::mutex> lock(mu_);
+        dynamic_plan_fast_cache_.insert({fast_key, plan_or.value()});
+        return plan_or.value();
+    }
+
     const std::string cache_key = MakePlanCacheKey(module, function_index, vm_symbol);
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -373,57 +449,23 @@ StatusOr<FfiBridge::DynamicCallPlan> FfiBridge::ResolveDynamicPlan(
     }
 
     std::optional<uint32_t> binding_index;
-    if (function_index < module.functions().size() &&
-        module.functions()[function_index].ffi_binding().enabled) {
-        const auto& header = module.functions()[function_index].ffi_binding();
-        binding_index = header.binding_index;
-    } else {
-        for (uint32_t i = 0; i < module.ffi_bindings().size(); ++i) {
-            if (module.ffi_bindings()[i].vm_symbol == vm_symbol) {
-                binding_index = i;
-                break;
-            }
+    for (uint32_t i = 0; i < module.ffi_bindings().size(); ++i) {
+        if (module.ffi_bindings()[i].vm_symbol == vm_symbol) {
+            binding_index = i;
+            break;
         }
     }
     if (!binding_index.has_value()) {
         return Status::NotFound("ffi symbol binding not found: " + std::string(vm_symbol));
     }
-    if (*binding_index >= module.ffi_bindings().size()) {
-        return Status::InvalidState("ffi binding index out of range");
-    }
 
-    const auto& binding = module.ffi_bindings()[*binding_index];
-    if (binding.library_index >= module.ffi_library_paths().size()) {
-        return Status::InvalidState("ffi library index out of range");
+    auto plan_or = build_plan(*binding_index, std::nullopt);
+    if (!plan_or.ok()) {
+        return plan_or.status();
     }
-    if (binding.signature_index >= module.ffi_signatures().size()) {
-        return Status::InvalidState("ffi signature index out of range");
-    }
-
-    DynamicCallPlan plan;
-    plan.signature = module.ffi_signatures()[binding.signature_index];
-    plan.library_path = module.ffi_library_paths()[binding.library_index];
-    plan.symbol_name = binding.native_symbol;
-    if (function_index < module.functions().size() &&
-        module.functions()[function_index].ffi_binding().enabled) {
-        const auto expected = module.functions()[function_index].ffi_binding().convention;
-        if (expected != plan.signature.convention) {
-            return Status::InvalidState("ffi function header convention mismatch");
-        }
-    }
-    auto convention_status = ValidateCallingConvention(plan.signature.convention);
-    if (!convention_status.ok()) {
-        return convention_status;
-    }
-    auto symbol_or = LoadDynamicSymbol(plan.library_path, plan.symbol_name);
-    if (!symbol_or.ok()) {
-        return symbol_or.status();
-    }
-    plan.symbol = symbol_or.value();
-
     std::lock_guard<std::mutex> lock(mu_);
-    dynamic_plan_cache_.insert({cache_key, plan});
-    return plan;
+    dynamic_plan_cache_.insert({cache_key, plan_or.value()});
+    return plan_or.value();
 }
 
 Status FfiBridge::ValidateModuleBindings(const Module& module) const {
@@ -456,12 +498,15 @@ StatusOr<Value> FfiBridge::InvokeDynamicPlan(
     if (args.size() != plan.signature.params.size()) {
         return Status::InvalidArgument("ffi argument count mismatch");
     }
+    if (args.size() > 8) {
+        return Status::Unsupported("ffi max arity is 8 in current backend");
+    }
 
     if (plan.symbol_name == "tie_std_io_print" && args.size() == 1) {
         if (args[0].type() == Value::Type::kString) {
-            auto text_or = vm_thread.owner().ResolveString(args[0]);
+            auto text_or = vm_thread.owner().ResolveStringPtr(args[0]);
             if (text_or.ok()) {
-                vm_thread.owner().EmitOutputLine(text_or.value());
+                vm_thread.owner().EmitOutputLine(*text_or.value());
                 return Value::Null();
             }
         }
@@ -469,12 +514,10 @@ StatusOr<Value> FfiBridge::InvokeDynamicPlan(
         return Value::Null();
     }
 
-    std::vector<std::string> temp_strings;
-    temp_strings.reserve(args.size());
-    std::vector<AbiScalar> raw_args;
-    raw_args.resize(args.size());
+    std::array<AbiScalar, 8> raw_args{};
+    const size_t arg_count = args.size();
     uint64_t float_mask = 0;
-    for (size_t i = 0; i < args.size(); ++i) {
+    for (size_t i = 0; i < arg_count; ++i) {
         const auto& param_type = plan.signature.params[i];
         if (IsFloatClass(param_type)) {
             auto f_or = ConvertValueToRawFloat(args[i]);
@@ -484,7 +527,7 @@ StatusOr<Value> FfiBridge::InvokeDynamicPlan(
             raw_args[i].f64 = f_or.value();
             float_mask |= (1ULL << i);
         } else {
-            auto v_or = ConvertValueToRawInt(vm_thread, param_type, args[i], temp_strings);
+            auto v_or = ConvertValueToRawInt(vm_thread, param_type, args[i]);
             if (!v_or.ok()) {
                 return v_or.status();
             }
@@ -493,28 +536,29 @@ StatusOr<Value> FfiBridge::InvokeDynamicPlan(
     }
 
     if (plan.signature.return_type.kind == AbiValueKind::kVoid) {
-        auto status = DispatchVoidCall(plan.symbol, float_mask, raw_args);
+        auto status = DispatchVoidCall(plan.symbol, float_mask, arg_count, raw_args.data());
         if (!status.ok()) {
             return status;
         }
         return Value::Null();
     }
     if (plan.signature.return_type.kind == AbiValueKind::kF32) {
-        auto ret_or = DispatchTypedCall<float>(plan.symbol, float_mask, raw_args);
+        auto ret_or = DispatchTypedCall<float>(plan.symbol, float_mask, arg_count, raw_args.data());
         if (!ret_or.ok()) {
             return ret_or.status();
         }
         return ConvertRawResultToValue(vm_thread, plan.signature.return_type, 0, ret_or.value());
     }
     if (plan.signature.return_type.kind == AbiValueKind::kF64) {
-        auto ret_or = DispatchTypedCall<double>(plan.symbol, float_mask, raw_args);
+        auto ret_or =
+            DispatchTypedCall<double>(plan.symbol, float_mask, arg_count, raw_args.data());
         if (!ret_or.ok()) {
             return ret_or.status();
         }
         return ConvertRawResultToValue(vm_thread, plan.signature.return_type, 0, ret_or.value());
     }
 
-    auto ret_or = DispatchTypedCall<uint64_t>(plan.symbol, float_mask, raw_args);
+    auto ret_or = DispatchTypedCall<uint64_t>(plan.symbol, float_mask, arg_count, raw_args.data());
     if (!ret_or.ok()) {
         return ret_or.status();
     }

@@ -27,6 +27,29 @@ class InstructionBuilder {
     InstructionBuilder& JmpIfZero(uint32_t reg, int32_t offset);
     InstructionBuilder& JmpIfNotZero(uint32_t reg, int32_t offset);
     InstructionBuilder& DecJnz(uint32_t reg, int32_t offset);
+    InstructionBuilder& AddDecJnz(uint32_t acc_reg, uint32_t counter_reg, int32_t offset);
+    InstructionBuilder& Inc(uint32_t reg);
+    InstructionBuilder& Dec(uint32_t reg);
+    InstructionBuilder& SubImmJnz(uint32_t reg, int32_t imm, int32_t offset);
+    InstructionBuilder& AddImmJnz(uint32_t reg, int32_t imm, int32_t offset);
+    InstructionBuilder& Closure(
+        uint32_t dst, uint32_t function_index, uint32_t first_upvalue_reg,
+        uint8_t upvalue_count);
+    InstructionBuilder& GetUpval(uint32_t dst, uint32_t upvalue_index);
+    InstructionBuilder& SetUpval(uint32_t src, uint32_t upvalue_index);
+    InstructionBuilder& CallClosure(uint32_t ret_reg, uint32_t closure_reg, uint32_t arg_count);
+    InstructionBuilder& TailCall(uint32_t ret_reg, uint32_t function_index, uint32_t arg_count);
+    InstructionBuilder& TailCallClosure(
+        uint32_t ret_reg, uint32_t closure_reg, uint32_t arg_count);
+    InstructionBuilder& VarArg(uint32_t dst, uint32_t vararg_start, uint32_t count);
+    InstructionBuilder& StrLen(uint32_t dst, uint32_t src);
+    InstructionBuilder& StrConcat(uint32_t dst, uint32_t lhs, uint32_t rhs);
+    InstructionBuilder& BitAnd(uint32_t dst, uint32_t lhs, uint32_t rhs);
+    InstructionBuilder& BitOr(uint32_t dst, uint32_t lhs, uint32_t rhs);
+    InstructionBuilder& BitXor(uint32_t dst, uint32_t lhs, uint32_t rhs);
+    InstructionBuilder& BitNot(uint32_t dst, uint32_t src);
+    InstructionBuilder& BitShl(uint32_t dst, uint32_t lhs, uint32_t rhs);
+    InstructionBuilder& BitShr(uint32_t dst, uint32_t lhs, uint32_t rhs);
     InstructionBuilder& Call(uint32_t ret_reg, uint32_t function_index, uint32_t arg_count);
     InstructionBuilder& FfiCall(uint32_t ret_reg, uint32_t symbol_index, uint32_t arg_count);
     InstructionBuilder& NewObject(uint32_t dst, uint32_t class_name_constant);

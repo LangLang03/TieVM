@@ -52,6 +52,23 @@ class FfiBridge {
         NativeFunction function;
     };
 
+    struct DynamicPlanFastKey {
+        const Module* module = nullptr;
+        uint32_t function_index = 0;
+
+        [[nodiscard]] bool operator==(const DynamicPlanFastKey& rhs) const {
+            return module == rhs.module && function_index == rhs.function_index;
+        }
+    };
+
+    struct DynamicPlanFastKeyHash {
+        [[nodiscard]] size_t operator()(const DynamicPlanFastKey& key) const {
+            const auto a = std::hash<const Module*>{}(key.module);
+            const auto b = std::hash<uint32_t>{}(key.function_index);
+            return a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2));
+        }
+    };
+
     struct DynamicCallPlan {
         FunctionSignature signature;
         std::string library_path;
@@ -74,6 +91,8 @@ class FfiBridge {
     std::unordered_set<std::thread::id> attached_threads_;
     mutable std::unordered_map<std::string, void*> dynamic_lib_handles_;
     mutable std::unordered_map<std::string, DynamicCallPlan> dynamic_plan_cache_;
+    mutable std::unordered_map<DynamicPlanFastKey, DynamicCallPlan, DynamicPlanFastKeyHash>
+        dynamic_plan_fast_cache_;
 };
 
 }  // namespace tie::vm

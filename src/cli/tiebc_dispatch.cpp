@@ -23,6 +23,9 @@ int Usage() {
     std::cerr << "  tiebc build-stdlib <output.tlb>\n";
     std::cerr << "  tiebc build-stdlib-tlbs <output.tlbs>\n";
     std::cerr << "  tiebc emit-hello <output.tbc>\n";
+    std::cerr << "  tiebc emit-opset <output.tbc>\n";
+    std::cerr << "  tiebc emit-oop-ok <output.tbc>\n";
+    std::cerr << "  tiebc emit-oop-error <output.tbc>\n";
     return 1;
 }
 
@@ -85,6 +88,15 @@ int RunTiebc(int argc, char** argv) {
     }
     if (cmd == "emit-hello") {
         return EmitHello(path);
+    }
+    if (cmd == "emit-opset") {
+        return EmitOpset(path);
+    }
+    if (cmd == "emit-oop-ok") {
+        return EmitOopOk(path);
+    }
+    if (cmd == "emit-oop-error") {
+        return EmitOopError(path);
     }
     return Usage();
 }

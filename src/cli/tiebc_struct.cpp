@@ -41,11 +41,15 @@ int PrintTbcStruct() {
     std::cout << "  constants:\n";
     std::cout << "    type(u8) + payload (i64/f64/utf8-string)\n";
     std::cout << "  functions:\n";
-    std::cout << "    name(string), reg_count(u16), param_count(u16), inst_count(u32)\n";
+    std::cout << "    name(string), reg_count(u16), param_count(u16), ffi-header, "
+                 "upvalue_count(u16), is_vararg(u8), inst_count(u32)\n";
     std::cout << "    instructions         = fixed 16 bytes each: opcode(u8), flags(u8),"
                  " reserved(u16), a(u32), b(u32), c(u32)\n";
     std::cout << "  optional debug section (when flag enabled):\n";
     std::cout << "    debug_line_count(u32), entries(function_idx, inst_idx, line, col)\n";
+    std::cout << "  optional class metadata section (when flag enabled):\n";
+    std::cout << "    class_count(u32), class_name(string), base_count+base_names,\n";
+    std::cout << "    method_count + method(name, function_index, access, is_virtual)\n";
     return 0;
 }
 
