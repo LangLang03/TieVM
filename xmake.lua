@@ -85,6 +85,7 @@ target("tiebc")
         "src/cli/tiebc_main.cpp",
         "src/cli/tiebc_disasm.cpp",
         "src/cli/tiebc_emit.cpp",
+        "src/cli/tiebc_aot.cpp",
         "src/cli/tiebc_struct.cpp",
         "src/cli/tiebc_dispatch.cpp"
     )

@@ -1,5 +1,18 @@
 # TieVM 开发历史
 
+## 2026-04-13 LLVM AOT 首版落地（本次）
+- 新增真实 AOT 编译 API：`AotCompiler + AotCompileOptions + AotCompileResult`。
+- 新增 `tiebc aot` 命令：
+  - 输入：`.tbc/.tlb/.tlbs`
+  - 输出：本地可执行文件（可选 `--emit-ir/--emit-obj`）
+  - 支持 `--target/--cc/--sysroot/--opt/--cflag/--ldflag`
+- AOT 后端采用 LLVM 文本 IR + 外部 clang 编译/链接。
+- FFI 静态链接输入来自模块内库路径，并在编译阶段执行路径解析与存在性校验。
+- 保留占位 API 兼容壳：`AotPipeline/AotMetadataEmitter` 改为返回 `Unsupported` 并提示迁移。
+- 测试更新：
+  - 占位 AOT 测试改为兼容壳行为验证。
+  - 新增 `.tbc/.tlbs` 到可执行产物的 AOT 编译与运行测试。
+
 ## 2026-04-09 M0-M1 工程与字节码基础
 - 初始化工程结构、`xmake` 构建链路、`tievm/tiebc/tievm_tests` 目标。
 - 完成 `.tbc` 指令集、构建器、序列化器、校验器。

@@ -84,6 +84,12 @@ VerificationResult Verifier::Verify(const Module& module) {
                 result.status = Status::VerificationFailed("class method name cannot be empty");
                 return result;
             }
+            if (static_cast<uint8_t>(method.access) >
+                static_cast<uint8_t>(BytecodeAccessModifier::kPrivate)) {
+                result.status =
+                    Status::VerificationFailed("class method access modifier out of range");
+                return result;
+            }
             if (!method_names.insert(method.name).second) {
                 result.status = Status::VerificationFailed(
                     "duplicate class method name in metadata");

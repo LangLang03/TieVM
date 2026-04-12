@@ -7,6 +7,7 @@ namespace tie::vm::cli {
 
 int RunTiebc(int argc, char** argv);
 int Usage();
+int AotCompileCmd(int argc, char** argv);
 int Check(const std::filesystem::path& path);
 int DisasmTbc(const std::filesystem::path& path);
 int DisasmTlb(const std::filesystem::path& path);

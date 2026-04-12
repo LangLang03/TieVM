@@ -187,16 +187,14 @@ TEST(Smoke, TlbHotReloadAtomicAndConflictReject) {
     EXPECT_FALSE(s2.Commit().ok());
 }
 
-TEST(Smoke, AotPlaceholderPipeline) {
+TEST(Smoke, AotDeprecatedPlaceholderPipeline) {
     AotPipeline pipeline;
     AotUnit unit;
     unit.module_name = "smoke.aot";
     unit.metadata = {{"backend", "none"}, {"stage", "placeholder"}};
-    ASSERT_TRUE(pipeline.AddUnit(std::move(unit)).ok());
-
-    const auto out_dir = test::TempPath("smoke_aot");
-    ASSERT_TRUE(pipeline.EmitMetadataDirectory(out_dir).ok());
-    EXPECT_TRUE(std::filesystem::exists(out_dir / "smoke.aot.aotmeta"));
+    auto status = pipeline.AddUnit(std::move(unit));
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), ErrorCode::kUnsupported);
 }
 
 TEST(Smoke, CompileAndRunHelloWorldAndChineseBytecode) {

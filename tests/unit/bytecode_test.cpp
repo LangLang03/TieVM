@@ -64,6 +64,70 @@ TEST(BytecodeTest, DeserializeRejectsTrailingGarbageBytes) {
     EXPECT_FALSE(parsed_or.ok());
 }
 
+TEST(BytecodeTest, DeserializeCanSkipVerifierForTrustedInput) {
+    Module module = test::BuildAddModule(1, 2);
+    auto bytes_or = Serializer::Serialize(module, false);
+    ASSERT_TRUE(bytes_or.ok()) << bytes_or.status().message();
+    auto bytes = std::move(bytes_or.value());
+
+    size_t offset = 0;
+    auto read_u32 = [&](size_t pos) -> uint32_t {
+        return static_cast<uint32_t>(bytes[pos]) |
+               (static_cast<uint32_t>(bytes[pos + 1]) << 8u) |
+               (static_cast<uint32_t>(bytes[pos + 2]) << 16u) |
+               (static_cast<uint32_t>(bytes[pos + 3]) << 24u);
+    };
+
+    offset += 4;   // magic
+    offset += 2;   // major
+    offset += 2;   // minor
+    offset += 4;   // flags
+
+    const uint32_t module_name_len = read_u32(offset);
+    offset += 4 + module_name_len;
+    offset += 4;  // version major
+    offset += 4;  // version minor
+    offset += 4;  // version patch
+    offset += 4;  // entry function
+
+    const uint32_t const_count = read_u32(offset);
+    offset += 4;
+    const uint32_t func_count = read_u32(offset);
+    offset += 4;
+    ASSERT_EQ(func_count, 1u);
+
+    for (uint32_t i = 0; i < const_count; ++i) {
+        ASSERT_LT(offset, bytes.size());
+        const uint8_t type = bytes[offset++];
+        if (type == static_cast<uint8_t>(ConstantType::kInt64) ||
+            type == static_cast<uint8_t>(ConstantType::kFloat64)) {
+            offset += 8;
+            continue;
+        }
+        if (type == static_cast<uint8_t>(ConstantType::kUtf8)) {
+            const uint32_t len = read_u32(offset);
+            offset += 4 + len;
+            continue;
+        }
+        FAIL() << "unexpected constant type while mutating serialized bytes";
+    }
+
+    const uint32_t fn_name_len = read_u32(offset);
+    offset += 4 + fn_name_len;
+    ASSERT_LE(offset + 2, bytes.size());
+    // Corrupt reg_count to zero so strict verification rejects it.
+    bytes[offset] = 0;
+    bytes[offset + 1] = 0;
+
+    DeserializeOptions trusted_options;
+    trusted_options.verify = false;
+    auto trusted_or = Serializer::Deserialize(bytes, trusted_options);
+    EXPECT_TRUE(trusted_or.ok()) << trusted_or.status().message();
+
+    auto strict_or = Serializer::Deserialize(bytes);
+    EXPECT_FALSE(strict_or.ok());
+}
+
 TEST(BytecodeTest, FastLoopDecJnzExecutesCorrectly) {
     Module module("fast.decjnz");
     const auto c_zero = module.AddConstant(Constant::Int64(0));
@@ -313,6 +377,27 @@ TEST(BytecodeTest, SerializeDeserializeClassMetadataRoundTrip) {
     ASSERT_EQ(parsed_or.value().classes()[0].methods.size(), 1u);
     EXPECT_EQ(parsed_or.value().classes()[0].methods[0].name, "plus1");
     EXPECT_EQ(parsed_or.value().classes()[0].methods[0].function_index, 0u);
+}
+
+TEST(BytecodeTest, VerifierRejectsInvalidClassAccessModifier) {
+    Module module("class.meta.invalid.access");
+    auto& fn = module.AddFunction("entry", 2, 1);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb).Ret(0);
+    module.set_entry_function(0);
+
+    BytecodeClassDecl klass;
+    klass.name = "BrokenClass";
+    klass.methods.push_back(BytecodeMethodDecl{
+        "run",
+        0,
+        static_cast<BytecodeAccessModifier>(255),
+        true,
+    });
+    module.AddClass(std::move(klass));
+
+    auto bytes_or = Serializer::Serialize(module, false);
+    EXPECT_FALSE(bytes_or.ok());
 }
 
 TEST(BytecodeTest, RuntimeValidationRejectsInvalidRegisterAccess) {

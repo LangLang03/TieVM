@@ -127,6 +127,13 @@ StatusOr<ObjectId> ObjectModel::NewObject(std::string_view class_name) {
         id = id_or.value();
     }
     objects_[id] = ObjectInstance{id, name, {}};
+    if (gc_ != nullptr) {
+        auto root_status = gc_->AddRoot(id);
+        if (!root_status.ok()) {
+            objects_.erase(id);
+            return root_status;
+        }
+    }
     return id;
 }
 

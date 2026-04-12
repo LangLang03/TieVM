@@ -72,8 +72,7 @@ class VmInstance {
   private:
     mutable std::mutex runtime_mu_;
     uint64_t next_string_id_ = 1;
-    uint64_t next_array_id_ = 1;
-    uint64_t next_map_id_ = 1;
+    uint64_t next_container_id_ = 1;
     std::unordered_map<uint64_t, std::string> strings_;
     std::unordered_map<std::string, uint64_t> string_ids_;
     std::unordered_map<uint64_t, std::vector<Value>> arrays_;

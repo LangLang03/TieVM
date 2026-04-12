@@ -14,9 +14,11 @@ namespace {
 int PrintUsage() {
 #if defined(TIEVM_ENABLE_HELP) && !defined(TIEVM_MINIMAL_STRINGS)
     std::cerr << "Usage:\n";
-    std::cerr << "  tievm run <file.tbc> [--validate]\n";
-    std::cerr << "  tievm run <file.tlb> [module_name] [--validate]\n";
-    std::cerr << "  tievm run <file.tlbs> [module_name] [--validate]\n";
+    std::cerr << "  tievm run <file.tbc> [--validate] [--trusted] [--cache-dir <dir>]\n";
+    std::cerr
+        << "  tievm run <file.tlb> [module_name] [--validate] [--trusted] [--cache-dir <dir>]\n";
+    std::cerr
+        << "  tievm run <file.tlbs> [module_name] [--validate] [--trusted] [--cache-dir <dir>]\n";
 #endif
     return 1;
 }
@@ -32,11 +34,23 @@ int RunTievm(int argc, char** argv) {
     const bool is_tlb = input.extension() == ".tlb" || input.extension() == ".tlbs";
     std::optional<std::string> module_name_override;
     bool enable_runtime_validate = false;
+    RunConfig run_config;
 
     for (int i = 3; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--validate") {
             enable_runtime_validate = true;
+            continue;
+        }
+        if (arg == "--trusted") {
+            run_config.trusted = true;
+            continue;
+        }
+        if (arg == "--cache-dir") {
+            if (i + 1 >= argc) {
+                return PrintUsage();
+            }
+            run_config.cache_dir = std::filesystem::path(argv[++i]);
             continue;
         }
         if (is_tlb && !module_name_override.has_value()) {
@@ -53,10 +67,10 @@ int RunTievm(int argc, char** argv) {
     vm.SetRuntimeValidationEnabled(enable_runtime_validate);
 
     if (input.extension() == ".tbc") {
-        return RunTbcFile(vm, input);
+        return RunTbcFile(vm, input, run_config);
     }
     if (is_tlb) {
-        return RunTlbFile(vm, input, module_name_override);
+        return RunTlbFile(vm, input, module_name_override, run_config);
     }
 
 #if !defined(TIEVM_MINIMAL_STRINGS)

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <limits>
 #include <sstream>
+#include <string_view>
 
 #include <zlib.h>
 
@@ -199,6 +200,37 @@ std::string Unquote(std::string text) {
     return text;
 }
 
+StatusOr<std::string> NormalizeBundleRelativePath(
+    std::string_view raw_path, const char* field_name) {
+    if (raw_path.empty()) {
+        return Status::SerializationError(
+            std::string(field_name) + " path cannot be empty");
+    }
+    std::filesystem::path path(raw_path);
+    if (path.has_root_name() || path.has_root_directory() || path.is_absolute()) {
+        return Status::SerializationError(
+            std::string(field_name) + " path must be relative");
+    }
+    path = path.lexically_normal();
+    if (path.empty()) {
+        return Status::SerializationError(
+            std::string(field_name) + " path cannot be empty");
+    }
+    for (const auto& part : path) {
+        const std::string token = part.string();
+        if (token.empty() || token == "." || token == "..") {
+            return Status::SerializationError(
+                std::string(field_name) + " path contains invalid segment");
+        }
+    }
+    const std::string normalized = path.generic_string();
+    if (normalized.empty() || normalized.front() == '/') {
+        return Status::SerializationError(
+            std::string(field_name) + " path is invalid");
+    }
+    return normalized;
+}
+
 Status WriteFile(const std::filesystem::path& path, const std::vector<uint8_t>& bytes) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -295,7 +327,12 @@ StatusOr<TlbsManifest> ParseManifest(const std::string& text) {
             continue;
         }
         if (key == "entry_module") {
-            manifest.entry_module = Unquote(value);
+            auto entry_or =
+                NormalizeBundleRelativePath(Unquote(value), "manifest entry_module");
+            if (!entry_or.ok()) {
+                return entry_or.status();
+            }
+            manifest.entry_module = std::move(entry_or.value());
             continue;
         }
         if (key == "modules") {
@@ -308,7 +345,12 @@ StatusOr<TlbsManifest> ParseManifest(const std::string& text) {
             while (std::getline(values, item, ',')) {
                 item = Unquote(item);
                 if (!item.empty()) {
-                    manifest.modules.push_back(item);
+                    auto module_or =
+                        NormalizeBundleRelativePath(item, "manifest module");
+                    if (!module_or.ok()) {
+                        return module_or.status();
+                    }
+                    manifest.modules.push_back(std::move(module_or.value()));
                 }
             }
             continue;
@@ -623,13 +665,21 @@ Status TlbsBundle::SerializeToDirectory(const std::filesystem::path& root) const
         return status;
     }
     for (const auto& [path, bytes] : modules_) {
-        status = WriteFile(root / path, bytes);
+        auto normalized_or = NormalizeBundleRelativePath(path, "module");
+        if (!normalized_or.ok()) {
+            return normalized_or.status();
+        }
+        status = WriteFile(root / normalized_or.value(), bytes);
         if (!status.ok()) {
             return status;
         }
     }
     for (const auto& [path, bytes] : libraries_) {
-        status = WriteFile(root / path, bytes);
+        auto normalized_or = NormalizeBundleRelativePath(path, "library");
+        if (!normalized_or.ok()) {
+            return normalized_or.status();
+        }
+        status = WriteFile(root / normalized_or.value(), bytes);
         if (!status.ok()) {
             return status;
         }
@@ -644,10 +694,18 @@ Status TlbsBundle::SerializeToZip(const std::filesystem::path& zip_path) const {
         "manifest.toml",
         std::vector<uint8_t>(manifest_text.begin(), manifest_text.end())});
     for (const auto& [path, bytes] : modules_) {
-        entries.push_back(ZipWriteEntry{path, bytes});
+        auto normalized_or = NormalizeBundleRelativePath(path, "module");
+        if (!normalized_or.ok()) {
+            return normalized_or.status();
+        }
+        entries.push_back(ZipWriteEntry{normalized_or.value(), bytes});
     }
     for (const auto& [path, bytes] : libraries_) {
-        entries.push_back(ZipWriteEntry{path, bytes});
+        auto normalized_or = NormalizeBundleRelativePath(path, "library");
+        if (!normalized_or.ok()) {
+            return normalized_or.status();
+        }
+        entries.push_back(ZipWriteEntry{normalized_or.value(), bytes});
     }
     return WriteZip(zip_path, std::move(entries));
 }
@@ -677,6 +735,10 @@ StatusOr<TlbsBundle> TlbsBundle::Deserialize(const std::filesystem::path& path) 
         if (std::filesystem::exists(libs_root)) {
             for (const auto& entry :
                  std::filesystem::recursive_directory_iterator(libs_root)) {
+                if (entry.is_symlink()) {
+                    return Status::SerializationError(
+                        "tlbs libs cannot contain symlink entries");
+                }
                 if (!entry.is_regular_file()) {
                     continue;
                 }
@@ -685,7 +747,11 @@ StatusOr<TlbsBundle> TlbsBundle::Deserialize(const std::filesystem::path& path) 
                     return bytes_or.status();
                 }
                 auto rel = std::filesystem::relative(entry.path(), path).generic_string();
-                bundle.SetLibrary(std::move(rel), std::move(bytes_or.value()));
+                auto normalized_or = NormalizeBundleRelativePath(rel, "library");
+                if (!normalized_or.ok()) {
+                    return normalized_or.status();
+                }
+                bundle.SetLibrary(std::move(normalized_or.value()), std::move(bytes_or.value()));
             }
         }
         return bundle;
@@ -715,7 +781,11 @@ StatusOr<TlbsBundle> TlbsBundle::Deserialize(const std::filesystem::path& path) 
     }
     for (const auto& [name, bytes] : files) {
         if (name.rfind("libs/", 0) == 0) {
-            bundle.SetLibrary(name, bytes);
+            auto normalized_or = NormalizeBundleRelativePath(name, "library");
+            if (!normalized_or.ok()) {
+                return normalized_or.status();
+            }
+            bundle.SetLibrary(normalized_or.value(), bytes);
         }
     }
     return bundle;

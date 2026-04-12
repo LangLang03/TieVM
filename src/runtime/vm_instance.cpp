@@ -45,11 +45,11 @@ StatusOr<Value> VmInstance::ExecuteModule(const Module& module, const std::vecto
 
 StatusOr<Value> VmInstance::ExecuteLoadedModule(
     const std::string& module_name, const std::vector<Value>& args) {
-    auto module_or = loader_.GetModulePtr(module_name);
+    auto module_or = loader_.GetModule(module_name);
     if (!module_or.ok()) {
         return module_or.status();
     }
-    return ExecuteModule(*module_or.value(), args);
+    return ExecuteModule(module_or.value(), args);
 }
 
 VmThread VmInstance::CreateThread() { return VmThread(this); }
@@ -88,7 +88,7 @@ StatusOr<const std::string*> VmInstance::ResolveStringPtr(const Value& value) co
 
 StatusOr<Value> VmInstance::CreateArray() {
     std::lock_guard<std::mutex> lock(runtime_mu_);
-    const uint64_t id = next_array_id_++;
+    const uint64_t id = next_container_id_++;
     arrays_[id] = {};
     return Value::Pointer(id);
 }
@@ -139,7 +139,7 @@ StatusOr<int64_t> VmInstance::ArraySize(Value array_handle) const {
 
 StatusOr<Value> VmInstance::CreateMap() {
     std::lock_guard<std::mutex> lock(runtime_mu_);
-    const uint64_t id = next_map_id_++;
+    const uint64_t id = next_container_id_++;
     maps_[id] = {};
     return Value::Pointer(id);
 }

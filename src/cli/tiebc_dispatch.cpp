@@ -41,6 +41,7 @@ int Usage() {
     std::cerr << "  tiebc tlb-struct\n";
     std::cerr << "  tiebc tlbs-struct\n";
     std::cerr << "  tiebc tbc-struct\n";
+    std::cerr << "  tiebc aot <input.{tbc|tlb|tlbs}> [module] -o <output_exe> [--target <triple>] [--cc <clang>] [--sysroot <path>] [--opt <O0|O1|O2|O3>] [--ldflag <flag>]... [--cflag <flag>]... [--emit-ir <file.ll>] [--emit-obj <file.o>]\n";
     std::cerr << "  tiebc build-stdlib <output.tlb>\n";
     std::cerr << "  tiebc build-stdlib-tlbs <output.tlbs>\n";
     std::cerr << "  tiebc emit-hello <output.tbc>\n";
@@ -67,6 +68,9 @@ int RunTiebc(int argc, char** argv) {
     }
     if (cmd == "tbc-struct") {
         return PrintTbcStruct();
+    }
+    if (cmd == "aot") {
+        return AotCompileCmd(argc, argv);
     }
     if (argc < 3) {
         return Usage();

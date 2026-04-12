@@ -654,8 +654,8 @@ StatusOr<Value> VmThread::ExecuteFunction(
                     auto ffi_or = owner_->ffi().CallBoundFunction(
                         module, function_index, symbol, *this, ffi_args);
                     if (!ffi_or.ok() && ffi_or.status().code() == ErrorCode::kNotFound) {
-                        const Module* loaded = owner_->loader().FindModuleByFfiSymbolPtr(symbol);
-                        if (loaded != nullptr) {
+                        auto loaded = owner_->loader().FindModuleByFfiSymbol(symbol);
+                        if (loaded.has_value()) {
                             ffi_or = owner_->ffi().CallBoundFunction(
                                 *loaded, 0, symbol, *this, ffi_args);
                         }
@@ -744,7 +744,6 @@ StatusOr<Value> VmThread::ExecuteFunction(
                 if (handled) {
                     continue;
                 }
-                ex.PushFrame(vm_frame_for_pc(static_cast<uint32_t>(pc)));
                 throw;
             }
         }

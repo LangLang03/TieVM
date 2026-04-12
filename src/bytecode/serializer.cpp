@@ -302,7 +302,8 @@ StatusOr<std::vector<uint8_t>> Serializer::Serialize(
     return out;
 }
 
-StatusOr<Module> Serializer::Deserialize(const std::vector<uint8_t>& bytes) {
+StatusOr<Module> Serializer::Deserialize(
+    const std::vector<uint8_t>& bytes, const DeserializeOptions& options) {
     size_t offset = 0;
     if (bytes.size() < 4 || std::memcmp(bytes.data(), kMagic, 4) != 0) {
         return Status::SerializationError("invalid tbc magic");
@@ -608,6 +609,11 @@ StatusOr<Module> Serializer::Deserialize(const std::vector<uint8_t>& bytes) {
                     !is_virtual_or.ok() || !reserved_or.ok()) {
                     return Status::SerializationError("failed reading class method metadata");
                 }
+                if (access_or.value() >
+                    static_cast<uint8_t>(BytecodeAccessModifier::kPrivate)) {
+                    return Status::SerializationError(
+                        "class method access modifier out of range");
+                }
                 class_decl.methods.push_back(BytecodeMethodDecl{
                     std::move(method_name_or.value()),
                     function_index_or.value(),
@@ -622,9 +628,11 @@ StatusOr<Module> Serializer::Deserialize(const std::vector<uint8_t>& bytes) {
         return Status::SerializationError("trailing bytes after tbc payload");
     }
 
-    auto verify = Verifier::Verify(module);
-    if (!verify.status.ok()) {
-        return verify.status;
+    if (options.verify) {
+        auto verify = Verifier::Verify(module);
+        if (!verify.status.ok()) {
+            return verify.status;
+        }
     }
     return module;
 }
@@ -647,13 +655,14 @@ Status Serializer::SerializeToFile(
     return Status::Ok();
 }
 
-StatusOr<Module> Serializer::DeserializeFromFile(const std::filesystem::path& path) {
+StatusOr<Module> Serializer::DeserializeFromFile(
+    const std::filesystem::path& path, const DeserializeOptions& options) {
     std::ifstream in(path, std::ios::binary);
     if (!in.is_open()) {
         return Status::NotFound("input file not found");
     }
     std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    return Deserialize(bytes);
+    return Deserialize(bytes, options);
 }
 
 }  // namespace tie::vm

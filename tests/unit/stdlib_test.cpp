@@ -55,6 +55,8 @@ TEST(StdlibTest, CollectionsArrayAndMap) {
         array_module.AddConstant(Constant::Utf8("tie.std.collections.array_push"));
     const auto sym_array_size =
         array_module.AddConstant(Constant::Utf8("tie.std.collections.array_size"));
+    const auto sym_array_free =
+        array_module.AddConstant(Constant::Utf8("tie.std.collections.array_free"));
     const auto v42 = array_module.AddConstant(Constant::Int64(42));
     auto& array_fn = array_module.AddFunction("entry", 10, 0);
     auto& array_bb = array_fn.AddBlock("entry");
@@ -66,6 +68,10 @@ TEST(StdlibTest, CollectionsArrayAndMap) {
         .FfiCall(0, sym_array_push, 2)
         .Mov(1, 4)
         .FfiCall(0, sym_array_size, 1)
+        .Mov(5, 0)
+        .Mov(1, 4)
+        .FfiCall(0, sym_array_free, 1)
+        .Mov(0, 5)
         .Ret(0);
     array_module.set_entry_function(0);
     auto array_result_or = vm.ExecuteModule(array_module);
@@ -79,6 +85,8 @@ TEST(StdlibTest, CollectionsArrayAndMap) {
         map_module.AddConstant(Constant::Utf8("tie.std.collections.map_set"));
     const auto sym_map_has =
         map_module.AddConstant(Constant::Utf8("tie.std.collections.map_has"));
+    const auto sym_map_free =
+        map_module.AddConstant(Constant::Utf8("tie.std.collections.map_free"));
     const auto key = map_module.AddConstant(Constant::Utf8("answer"));
     const auto value = map_module.AddConstant(Constant::Int64(42));
     auto& map_fn = map_module.AddFunction("entry", 12, 0);
@@ -93,6 +101,10 @@ TEST(StdlibTest, CollectionsArrayAndMap) {
         .Mov(1, 4)
         .LoadK(2, key)
         .FfiCall(0, sym_map_has, 2)
+        .Mov(5, 0)
+        .Mov(1, 4)
+        .FfiCall(0, sym_map_free, 1)
+        .Mov(0, 5)
         .Ret(0);
     map_module.set_entry_function(0);
     auto map_result_or = vm.ExecuteModule(map_module);
@@ -225,6 +237,8 @@ TEST(StdlibTest, CollectionsExtendedApis) {
         array_module.AddConstant(Constant::Utf8("tie.std.collections.array_size"));
     const auto sym_array_clear =
         array_module.AddConstant(Constant::Utf8("tie.std.collections.array_clear"));
+    const auto sym_array_free =
+        array_module.AddConstant(Constant::Utf8("tie.std.collections.array_free"));
     const auto c42 = array_module.AddConstant(Constant::Int64(42));
     const auto c7 = array_module.AddConstant(Constant::Int64(7));
     auto& afn = array_module.AddFunction("entry", 12, 0);
@@ -249,6 +263,10 @@ TEST(StdlibTest, CollectionsExtendedApis) {
         .Mov(1, 4)
         .FfiCall(0, sym_array_size, 1)
         .Add(0, 5, 0)
+        .Mov(6, 0)
+        .Mov(1, 4)
+        .FfiCall(0, sym_array_free, 1)
+        .Mov(0, 6)
         .Ret(0);
     array_module.set_entry_function(0);
     auto array_result_or = vm.ExecuteModule(array_module);
@@ -264,6 +282,8 @@ TEST(StdlibTest, CollectionsExtendedApis) {
         map_module.AddConstant(Constant::Utf8("tie.std.collections.map_size"));
     const auto sym_map_remove =
         map_module.AddConstant(Constant::Utf8("tie.std.collections.map_remove"));
+    const auto sym_map_free =
+        map_module.AddConstant(Constant::Utf8("tie.std.collections.map_free"));
     const auto key = map_module.AddConstant(Constant::Utf8("answer"));
     const auto value = map_module.AddConstant(Constant::Int64(42));
     auto& mfn = map_module.AddFunction("entry", 12, 0);
@@ -284,6 +304,10 @@ TEST(StdlibTest, CollectionsExtendedApis) {
         .Mov(1, 4)
         .FfiCall(0, sym_map_size, 1)
         .Add(0, 5, 0)
+        .Mov(6, 0)
+        .Mov(1, 4)
+        .FfiCall(0, sym_map_free, 1)
+        .Mov(0, 6)
         .Ret(0);
     map_module.set_entry_function(0);
     auto map_result_or = vm.ExecuteModule(map_module);

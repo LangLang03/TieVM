@@ -59,7 +59,11 @@ int Usage() {
                  "[--fib-n <int>] "
                  "[--repeat <int64>] "
                  "[--warmup <int>] "
-                 "[--rounds <int>]\n";
+                 "[--rounds <int>] "
+                 "[--runtime-validate] "
+                 "[--load-per-run] "
+                 "[--serialize-per-run] "
+                 "[--trusted]\n";
     return 1;
 }
 
@@ -132,6 +136,10 @@ int main(int argc, char** argv) {
     int64_t repeat = 1;
     int warmup = 2;
     int rounds = 8;
+    bool runtime_validate = false;
+    bool load_per_run = false;
+    bool serialize_per_run = false;
+    bool trusted = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg(argv[i]);
@@ -180,6 +188,23 @@ int main(int argc, char** argv) {
             }
             continue;
         }
+        if (arg == "--runtime-validate") {
+            runtime_validate = true;
+            continue;
+        }
+        if (arg == "--load-per-run") {
+            load_per_run = true;
+            continue;
+        }
+        if (arg == "--serialize-per-run") {
+            serialize_per_run = true;
+            load_per_run = true;
+            continue;
+        }
+        if (arg == "--trusted") {
+            trusted = true;
+            continue;
+        }
         std::cerr << "unknown argument: " << arg << "\n";
         return Usage();
     }
@@ -216,9 +241,44 @@ int main(int argc, char** argv) {
     }
 
     tie::vm::VmInstance vm;
+    vm.SetRuntimeValidationEnabled(runtime_validate);
+
+    tie::vm::DeserializeOptions deserialize_options;
+    deserialize_options.verify = !trusted;
+
+    std::vector<uint8_t> serialized_once;
+    if (load_per_run && !serialize_per_run) {
+        auto bytes_or = tie::vm::Serializer::Serialize(module, false);
+        if (!bytes_or.ok()) {
+            std::cerr << "serialize failed: " << bytes_or.status().message() << "\n";
+            return 2;
+        }
+        serialized_once = std::move(bytes_or.value());
+    }
+
+    auto run_once = [&]() -> tie::vm::StatusOr<tie::vm::Value> {
+        if (!load_per_run) {
+            return vm.ExecuteModule(module);
+        }
+        std::vector<uint8_t> serialized_tmp;
+        const std::vector<uint8_t>* payload = &serialized_once;
+        if (serialize_per_run) {
+            auto bytes_or = tie::vm::Serializer::Serialize(module, false);
+            if (!bytes_or.ok()) {
+                return bytes_or.status();
+            }
+            serialized_tmp = std::move(bytes_or.value());
+            payload = &serialized_tmp;
+        }
+        auto loaded_or = tie::vm::Serializer::Deserialize(*payload, deserialize_options);
+        if (!loaded_or.ok()) {
+            return loaded_or.status();
+        }
+        return vm.ExecuteModule(loaded_or.value());
+    };
 
     for (int i = 0; i < warmup; ++i) {
-        auto result_or = vm.ExecuteModule(module);
+        auto result_or = run_once();
         if (!result_or.ok()) {
             std::cerr << "warmup failed: " << result_or.status().message() << "\n";
             return 2;
@@ -230,9 +290,9 @@ int main(int argc, char** argv) {
     int64_t result = 0;
     for (int i = 0; i < rounds; ++i) {
         const auto t0 = std::chrono::steady_clock::now();
-        auto result_or = vm.ExecuteModule(module);
+        auto result_or = run_once();
         for (int64_t rep = 1; rep < repeat && result_or.ok(); ++rep) {
-            result_or = vm.ExecuteModule(module);
+            result_or = run_once();
         }
         const auto t1 = std::chrono::steady_clock::now();
         if (!result_or.ok()) {
@@ -252,6 +312,10 @@ int main(int argc, char** argv) {
               << " warmup=" << warmup
               << " rounds=" << rounds
               << " repeat=" << repeat
+              << " runtime_validate=" << (runtime_validate ? 1 : 0)
+              << " load_per_run=" << (load_per_run ? 1 : 0)
+              << " serialize_per_run=" << (serialize_per_run ? 1 : 0)
+              << " trusted=" << (trusted ? 1 : 0)
               << " result=" << result
               << " expect=" << expect
               << " avg_ms=" << avg
