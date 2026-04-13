@@ -15,12 +15,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: xmake-io/github-action-setup-xmake@v1
-      - name: Configure
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: xmake f -y -m release --toolchain=clang --ldflags="-Wno-unused-command-line-argument" --linker-flags="/DEBUG:NONE"
+
+      - name: Configure (Linux/macOS)
+        if: runner.os != 'Windows'
         run: xmake f -y -m release --toolchain=clang
+
       - name: Build
         run: xmake build -y -vD
+
       - name: Unit + Smoke
         run: xmake run tievm_tests
+
       - name: Smoke Only
         run: xmake run tievm_tests --gtest_filter=Smoke.*
 
@@ -52,10 +60,10 @@ jobs:
 
       - name: Generate compile_commands.json
         run: xmake project -k compile_commands
+
       - name: Run clang-tidy (changed files only)
         if: github.event_name == 'pull_request'
         run: |
-          # 获取相对于目标分支的变更 .cpp 文件
           git diff --name-only --diff-filter=AM origin/${{ github.base_ref }}...HEAD -- 'src/**/*.cpp' 'tests/**/*.cpp' > changed_files.txt || true
           if [ -s changed_files.txt ]; then
             echo "Checking changed files:"
@@ -65,9 +73,7 @@ jobs:
             echo "No C++ files changed."
           fi
 
-      # 备选：全量检查所有 .cpp 文件（用于 push 到 main/develop 时的完整扫描）
       - name: Run clang-tidy (all files)
         if: github.event_name == 'push'
         run: |
-          # 使用 find 获取所有 .cpp 文件，避免 shell 通配符展开问题
           find src tests -name '*.cpp' -type f -print0 | xargs -0 clang-tidy -p .
