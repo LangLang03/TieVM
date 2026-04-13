@@ -134,7 +134,8 @@ target("tievm_vmp_auth")
         if not is_plat("windows") then
             set_strip("all")
         else
-            if is_toolchain("clang", "clang-cl") then
+            local toolchain = get_config("toolchain") or ""
+            if toolchain:find("clang") then
                 add_ldflags("-Wl,/DEBUG:NONE", {force = true})
             else
                 add_ldflags("/DEBUG:NONE", {force = true})
