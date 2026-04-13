@@ -15,20 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: xmake-io/github-action-setup-xmake@v1
-      - name: Configure (Windows)
-        if: runner.os == 'Windows'
-        run: xmake f -y -m release --toolchain=clang --ldflags="-Wno-unused-command-line-argument" --linker-flags="/DEBUG:NONE"
-
-      - name: Configure (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Configure
         run: xmake f -y -m release --toolchain=clang
-
       - name: Build
         run: xmake build -y -vD
-
       - name: Unit + Smoke
         run: xmake run tievm_tests
-
       - name: Smoke Only
         run: xmake run tievm_tests --gtest_filter=Smoke.*
 
