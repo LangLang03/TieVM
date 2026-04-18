@@ -1,6 +1,7 @@
 #include "tie/vm/aot/aot_pipeline.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cstdint>
@@ -17,6 +18,10 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <process.h>
+#endif
 
 #include "tie/vm/bytecode/opcode.hpp"
 #include "tie/vm/bytecode/serializer.hpp"
@@ -154,18 +159,41 @@ Status RunCommand(const std::vector<std::string>& args) {
     if (args.empty()) {
         return Status::InvalidArgument("[AOT] TOOLCHAIN msg=empty command");
     }
-    std::string cmd;
+    std::string cmd_for_log;
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) {
-            cmd.push_back(' ');
+            cmd_for_log.push_back(' ');
         }
-        cmd += QuoteShellArg(args[i]);
+        cmd_for_log += QuoteShellArg(args[i]);
     }
-    const int rc = std::system(cmd.c_str());
+
+#if defined(_WIN32)
+    std::vector<const char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& arg : args) {
+        argv.push_back(arg.c_str());
+    }
+    argv.push_back(nullptr);
+
+    const intptr_t rc = _spawnvp(_P_WAIT, args[0].c_str(), argv.data());
+    if (rc == -1) {
+        return Status::RuntimeError(
+            "[AOT] TOOLCHAIN msg=command spawn failed errno=" + std::to_string(errno) +
+            " err=" + std::strerror(errno) + " cmd=" + cmd_for_log);
+    }
     if (rc != 0) {
         return Status::RuntimeError(
-            "[AOT] TOOLCHAIN msg=command failed rc=" + std::to_string(rc) + " cmd=" + cmd);
+            "[AOT] TOOLCHAIN msg=command failed rc=" + std::to_string(rc) + " cmd=" +
+            cmd_for_log);
     }
+#else
+    const int rc = std::system(cmd_for_log.c_str());
+    if (rc != 0) {
+        return Status::RuntimeError(
+            "[AOT] TOOLCHAIN msg=command failed rc=" + std::to_string(rc) + " cmd=" +
+            cmd_for_log);
+    }
+#endif
     return Status::Ok();
 }
 
