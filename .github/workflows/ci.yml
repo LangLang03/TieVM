@@ -14,7 +14,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: xmake-io/github-action-setup-xmake@v1
+      - name: Setup xmake
+        id: setup_xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - name: Fallback setup xmake on Windows
+        if: runner.os == 'Windows' && steps.setup_xmake.outcome == 'failure'
+        shell: pwsh
+        run: |
+          choco install xmake -y --no-progress
+      - name: Check xmake version
+        run: xmake --version
       - name: Configure
         run: xmake f -y -m release --toolchain=clang
       - name: Build
