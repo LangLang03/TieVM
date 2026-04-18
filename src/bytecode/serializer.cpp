@@ -11,10 +11,7 @@ namespace {
 
 constexpr uint8_t kMagic[4] = {'T', 'B', 'C', '0'};
 constexpr uint16_t kFormatMajor = 0;
-constexpr uint16_t kFormatMinor = 4;
-constexpr uint16_t kLegacyFormatMinorV1 = 1;
-constexpr uint16_t kLegacyFormatMinorV2 = 2;
-constexpr uint16_t kLegacyFormatMinorV3 = 3;
+constexpr uint16_t kFormatMinor = 6;
 constexpr uint32_t kFlagDebug = 1u << 0;
 constexpr uint32_t kFlagFfiMetadata = 1u << 1;
 constexpr uint32_t kFlagClassMetadata = 1u << 2;
@@ -209,6 +206,11 @@ StatusOr<std::vector<uint8_t>> Serializer::Serialize(
         WriteString(out, function.name());
         WriteU16(out, function.reg_count());
         WriteU16(out, function.param_count());
+        WriteU16(out, static_cast<uint16_t>(function.param_types().size()));
+        for (const auto param_type : function.param_types()) {
+            WriteU8(out, static_cast<uint8_t>(param_type));
+        }
+        WriteU8(out, static_cast<uint8_t>(function.return_type()));
         WriteU8(out, function.ffi_binding().enabled ? 1 : 0);
         WriteU8(out, static_cast<uint8_t>(function.ffi_binding().convention));
         WriteU16(out, 0);
@@ -216,7 +218,7 @@ StatusOr<std::vector<uint8_t>> Serializer::Serialize(
         WriteU32(out, function.ffi_binding().binding_index);
         WriteU16(out, function.upvalue_count());
         WriteU8(out, function.is_vararg() ? 1 : 0);
-        WriteU8(out, 0);
+        WriteU8(out, function.is_exported() ? 1 : 0);
 
         const auto instructions = function.FlattenedInstructions();
         WriteU32(out, static_cast<uint32_t>(instructions.size()));
@@ -323,9 +325,7 @@ StatusOr<Module> Serializer::Deserialize(
     if (format_major != kFormatMajor) {
         return Status::SerializationError("unsupported tbc major version");
     }
-    if (format_minor != kLegacyFormatMinorV1 && format_minor != kLegacyFormatMinorV2 &&
-        format_minor != kLegacyFormatMinorV3 &&
-        format_minor != kFormatMinor) {
+    if (format_minor != kFormatMinor) {
         return Status::SerializationError("unsupported tbc minor version");
     }
 
@@ -400,37 +400,70 @@ StatusOr<Module> Serializer::Deserialize(
         auto fn_name_or = ReadString(bytes, &offset);
         auto reg_or = ReadIntegral<uint16_t>(bytes, &offset);
         auto param_or = ReadIntegral<uint16_t>(bytes, &offset);
-        if (!fn_name_or.ok() || !reg_or.ok() || !param_or.ok()) {
+        auto param_type_count_or = ReadIntegral<uint16_t>(bytes, &offset);
+        if (!fn_name_or.ok() || !reg_or.ok() || !param_or.ok() || !param_type_count_or.ok()) {
             return Status::SerializationError("failed reading function header");
         }
+        if (param_type_count_or.value() != param_or.value()) {
+            return Status::SerializationError("function param type count mismatch");
+        }
 
-        auto& fn = module.AddFunction(fn_name_or.value(), reg_or.value(), param_or.value());
-        if (format_minor >= kLegacyFormatMinorV2) {
-            auto ffi_enabled_or = ReadIntegral<uint8_t>(bytes, &offset);
-            auto ffi_convention_or = ReadIntegral<uint8_t>(bytes, &offset);
-            auto ffi_reserved_or = ReadIntegral<uint16_t>(bytes, &offset);
-            auto ffi_signature_or = ReadIntegral<uint32_t>(bytes, &offset);
-            auto ffi_binding_or = ReadIntegral<uint32_t>(bytes, &offset);
-            if (!ffi_enabled_or.ok() || !ffi_convention_or.ok() || !ffi_reserved_or.ok() ||
-                !ffi_signature_or.ok() || !ffi_binding_or.ok()) {
-                return Status::SerializationError("failed reading ffi function header");
+        std::vector<BytecodeValueType> param_types;
+        param_types.reserve(param_type_count_or.value());
+        for (uint16_t p = 0; p < param_type_count_or.value(); ++p) {
+            auto param_type_or = ReadIntegral<uint8_t>(bytes, &offset);
+            if (!param_type_or.ok()) {
+                return Status::SerializationError("failed reading function param type");
             }
-            fn.ffi_binding().enabled = ffi_enabled_or.value() != 0;
-            fn.ffi_binding().convention =
-                static_cast<CallingConvention>(ffi_convention_or.value());
-            fn.ffi_binding().signature_index = ffi_signature_or.value();
-            fn.ffi_binding().binding_index = ffi_binding_or.value();
-        }
-        if (format_minor >= kFormatMinor) {
-            auto upvalue_count_or = ReadIntegral<uint16_t>(bytes, &offset);
-            auto vararg_enabled_or = ReadIntegral<uint8_t>(bytes, &offset);
-            auto vararg_reserved_or = ReadIntegral<uint8_t>(bytes, &offset);
-            if (!upvalue_count_or.ok() || !vararg_enabled_or.ok() || !vararg_reserved_or.ok()) {
-                return Status::SerializationError("failed reading closure/vararg function header");
+            const auto param_type = static_cast<BytecodeValueType>(param_type_or.value());
+            if (!IsValidBytecodeValueType(param_type)) {
+                return Status::SerializationError("function param type out of range");
             }
-            fn.set_upvalue_count(upvalue_count_or.value());
-            fn.set_is_vararg(vararg_enabled_or.value() != 0);
+            param_types.push_back(param_type);
         }
+        auto return_type_or = ReadIntegral<uint8_t>(bytes, &offset);
+        if (!return_type_or.ok()) {
+            return Status::SerializationError("failed reading function return type");
+        }
+        const auto return_type = static_cast<BytecodeValueType>(return_type_or.value());
+        if (!IsValidBytecodeValueType(return_type)) {
+            return Status::SerializationError("function return type out of range");
+        }
+
+        auto& fn = module.AddFunction(
+            fn_name_or.value(),
+            reg_or.value(),
+            param_or.value(),
+            0,
+            false,
+            false,
+            std::move(param_types),
+            return_type);
+
+        auto ffi_enabled_or = ReadIntegral<uint8_t>(bytes, &offset);
+        auto ffi_convention_or = ReadIntegral<uint8_t>(bytes, &offset);
+        auto ffi_reserved_or = ReadIntegral<uint16_t>(bytes, &offset);
+        auto ffi_signature_or = ReadIntegral<uint32_t>(bytes, &offset);
+        auto ffi_binding_or = ReadIntegral<uint32_t>(bytes, &offset);
+        if (!ffi_enabled_or.ok() || !ffi_convention_or.ok() || !ffi_reserved_or.ok() ||
+            !ffi_signature_or.ok() || !ffi_binding_or.ok()) {
+            return Status::SerializationError("failed reading ffi function header");
+        }
+        fn.ffi_binding().enabled = ffi_enabled_or.value() != 0;
+        fn.ffi_binding().convention =
+            static_cast<CallingConvention>(ffi_convention_or.value());
+        fn.ffi_binding().signature_index = ffi_signature_or.value();
+        fn.ffi_binding().binding_index = ffi_binding_or.value();
+
+        auto upvalue_count_or = ReadIntegral<uint16_t>(bytes, &offset);
+        auto vararg_enabled_or = ReadIntegral<uint8_t>(bytes, &offset);
+        auto export_enabled_or = ReadIntegral<uint8_t>(bytes, &offset);
+        if (!upvalue_count_or.ok() || !vararg_enabled_or.ok() || !export_enabled_or.ok()) {
+            return Status::SerializationError("failed reading closure/vararg function header");
+        }
+        fn.set_upvalue_count(upvalue_count_or.value());
+        fn.set_is_vararg(vararg_enabled_or.value() != 0);
+        fn.set_is_exported(export_enabled_or.value() != 0);
 
         auto inst_count_or = ReadIntegral<uint32_t>(bytes, &offset);
         if (!inst_count_or.ok()) {
@@ -479,10 +512,6 @@ StatusOr<Module> Serializer::Deserialize(
     }
 
     if ((flags & kFlagFfiMetadata) != 0u) {
-        if (format_minor < kLegacyFormatMinorV2) {
-            return Status::SerializationError("ffi metadata requires tbc format v0.2+");
-        }
-
         auto lib_count_or = ReadIntegral<uint32_t>(bytes, &offset);
         if (!lib_count_or.ok()) {
             return lib_count_or.status();
@@ -573,9 +602,6 @@ StatusOr<Module> Serializer::Deserialize(
     }
 
     if ((flags & kFlagClassMetadata) != 0u) {
-        if (format_minor < kFormatMinor) {
-            return Status::SerializationError("class metadata requires tbc format v0.4+");
-        }
         auto class_count_or = ReadIntegral<uint32_t>(bytes, &offset);
         if (!class_count_or.ok()) {
             return class_count_or.status();

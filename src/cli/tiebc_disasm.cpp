@@ -107,6 +107,23 @@ std::string FormatTarget(int64_t target, size_t code_size) {
     return "#" + std::to_string(target);
 }
 
+std::string FormatParamTypes(const Function& function) {
+    std::ostringstream out;
+    out << "[";
+    for (size_t i = 0; i < function.param_types().size(); ++i) {
+        if (i > 0) {
+            out << ", ";
+        }
+        out << BytecodeValueTypeName(function.param_types()[i]);
+    }
+    out << "]";
+    return out.str();
+}
+
+std::string FormatReturnType(const Function& function) {
+    return std::string(BytecodeValueTypeName(function.return_type()));
+}
+
 std::string FormatInstruction(
     const Module& module, const Instruction& inst, size_t pc, size_t code_size) {
     std::ostringstream out;
@@ -424,8 +441,11 @@ int DisasmTbc(const std::filesystem::path& path) {
         const auto& fn = module.functions()[fn_i];
         std::cout << "func[" << fn_i << "] " << fn.name() << " regs=" << fn.reg_count()
                   << " params=" << fn.param_count()
+                  << " param_types=" << FormatParamTypes(fn)
+                  << " return_type=" << FormatReturnType(fn)
                   << " upvalues=" << fn.upvalue_count()
                   << " vararg=" << (fn.is_vararg() ? "yes" : "no")
+                  << " export=" << (fn.is_exported() ? "yes" : "no")
                   << "\n";
         const auto code = fn.FlattenedInstructions();
         for (size_t i = 0; i < code.size(); ++i) {

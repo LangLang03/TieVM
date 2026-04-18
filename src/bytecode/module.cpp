@@ -24,9 +24,17 @@ std::vector<Instruction> Function::FlattenedInstructions() const {
 
 Function& Module::AddFunction(
     std::string name, uint16_t reg_count, uint16_t param_count,
-    uint16_t upvalue_count, bool is_vararg) {
+    uint16_t upvalue_count, bool is_vararg, bool is_exported,
+    std::vector<BytecodeValueType> param_types, BytecodeValueType return_type) {
     functions_.emplace_back(
-        std::move(name), reg_count, param_count, upvalue_count, is_vararg);
+        std::move(name),
+        reg_count,
+        param_count,
+        upvalue_count,
+        is_vararg,
+        is_exported,
+        std::move(param_types),
+        return_type);
     return functions_.back();
 }
 

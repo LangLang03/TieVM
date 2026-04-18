@@ -13,10 +13,11 @@ int PrintAotUsage() {
 #if defined(TIEVM_ENABLE_HELP)
     std::cerr << "Usage:\n";
     std::cerr
-        << "  tiebc aot <input.{tbc|tlb|tlbs}> [module] -o <output_exe> "
+        << "  tiebc aot <input.{tbc|tlb|tlbs}> [module] -o <output> "
+           "[--shared] "
            "[--target <triple>] [--cc <clang>] [--sysroot <path>] "
            "[--opt <O0|O1|O2|O3>] [--ldflag <flag>]... [--cflag <flag>]... "
-           "[--emit-ir <file.ll>] [--emit-obj <file.o>]\n";
+           "[--emit-ir <file.ll>] [--emit-obj <file.o>] [--emit-header <file.h>]\n";
 #endif
     return 1;
 }
@@ -47,6 +48,10 @@ int AotCompileCmd(int argc, char** argv) {
                 return PrintAotUsage();
             }
             options.output_executable = std::filesystem::path(argv[++i]);
+            continue;
+        }
+        if (arg == "--shared") {
+            options.output_kind = AotOutputKind::kSharedLibrary;
             continue;
         }
         if (arg == "--target") {
@@ -91,6 +96,13 @@ int AotCompileCmd(int argc, char** argv) {
             options.emit_obj = std::filesystem::path(argv[++i]);
             continue;
         }
+        if (arg == "--emit-header") {
+            if (i + 1 >= argc) {
+                return PrintAotUsage();
+            }
+            options.emit_header = std::filesystem::path(argv[++i]);
+            continue;
+        }
         if (arg == "--ldflag") {
             if (i + 1 >= argc) {
                 return PrintAotUsage();
@@ -111,7 +123,7 @@ int AotCompileCmd(int argc, char** argv) {
     }
 
     if (options.output_executable.empty()) {
-        std::cerr << "aot: missing required -o <output_exe>\n";
+        std::cerr << "aot: missing required -o <output>\n";
         return PrintAotUsage();
     }
 
@@ -125,12 +137,28 @@ int AotCompileCmd(int argc, char** argv) {
     const auto& result = result_or.value();
     std::cout << "aot wrote " << result.output_executable.string()
               << " module=" << result.compiled_module
-              << " target=" << result.target_triple << "\n";
+              << " target=" << result.target_triple
+              << " kind="
+              << (result.output_kind == AotOutputKind::kSharedLibrary ? "shared" : "exe")
+              << "\n";
     if (result.emitted_ir.has_value()) {
         std::cout << "aot ir=" << result.emitted_ir->string() << "\n";
     }
     if (result.emitted_obj.has_value()) {
         std::cout << "aot obj=" << result.emitted_obj->string() << "\n";
+    }
+    if (result.emitted_header.has_value()) {
+        std::cout << "aot header=" << result.emitted_header->string() << "\n";
+    }
+    if (!result.exported_functions.empty()) {
+        std::cout << "aot exports=";
+        for (size_t i = 0; i < result.exported_functions.size(); ++i) {
+            if (i > 0) {
+                std::cout << ",";
+            }
+            std::cout << result.exported_functions[i];
+        }
+        std::cout << "\n";
     }
     return 0;
 }

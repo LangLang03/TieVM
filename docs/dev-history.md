@@ -1,5 +1,29 @@
 # TieVM 开发历史
 
+## 2026-04-18 TBC v0.5 破坏性升级（函数参数类型 + AOT 共享库导出）
+- 字节码函数签名升级：
+  - 新增 `BytecodeValueType`（`any/null/int64/float64/bool/object/pointer/string/closure`）。
+  - 所有函数支持 `param_types/return_type`，`Module::AddFunction` 增加类型签名入参。
+- `.tbc` 格式升级到 `v0.6`：
+  - 函数头新增 `param_type_count + param_types + return_type` 序列化字段。
+  - 反序列化改为仅接受 `v0.6`，不再兼容旧 minor 版本。
+- 校验与运行时增强：
+  - `Verifier` 新增函数参数类型签名一致性校验（`param_types.size == param_count`）。
+  - 解释器调用路径新增固定参数类型检查，不匹配时返回结构化 `InvalidArgument`。
+  - AOT 生成函数入口同样加入参数 tag 检查，解释执行与 AOT 行为对齐。
+- AOT 导出能力增强：
+  - `AotCompileOptions` 新增 `output_kind` 与 `emit_header`。
+  - `tiebc aot` 支持 `--shared` 输出 `.so/.dylib/.dll`，并可 `--emit-header` 自动生成导出头文件。
+  - 导出头文件按 `param_types/return_type` 生成强类型函数签名，支持直接 `funcname(123, true)` 调用与真实类型返回值。
+  - 导出函数保持原函数名（不重命名），共享库模式下会自动导出模块中 `is_exported=true` 的函数。
+- CLI/文档同步：
+  - `tiebc disasm` 输出函数 `param_types`。
+  - `tbc-struct` 输出函数头字段顺序更新为 `param_type_count + param_types + ffi-header + ...`。
+  - `README` 补充函数类型签名与 `v0.5` 兼容性说明。
+- 测试补充：
+  - 新增参数类型 round-trip、签名不一致拒绝、调用参数类型不匹配拒绝测试。
+  - 新增 shared library 导出与自动生成 `.h` 的集成测试。
+
 ## 2026-04-13 LLVM AOT 首版落地（本次）
 - 新增真实 AOT 编译 API：`AotCompiler + AotCompileOptions + AotCompileResult`。
 - 新增 `tiebc aot` 命令：

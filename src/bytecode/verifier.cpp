@@ -1,13 +1,36 @@
 #include "tie/vm/bytecode/verifier.hpp"
 
-#include <unordered_set>
+#include <cctype>
 #include <sstream>
+#include <string_view>
+#include <unordered_set>
 
 namespace tie::vm {
 
 namespace {
 
 constexpr uint32_t kInvalidTryTarget = 0xFFFFFFFFu;
+
+bool IsAsciiIdentStart(unsigned char c) { return std::isalpha(c) != 0 || c == '_'; }
+
+bool IsAsciiIdentContinue(unsigned char c) {
+    return std::isalnum(c) != 0 || c == '_';
+}
+
+bool IsValidExportedFunctionName(std::string_view name) {
+    if (name.empty()) {
+        return false;
+    }
+    if (!IsAsciiIdentStart(static_cast<unsigned char>(name.front()))) {
+        return false;
+    }
+    for (size_t i = 1; i < name.size(); ++i) {
+        if (!IsAsciiIdentContinue(static_cast<unsigned char>(name[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
 
 bool IsControlFlow(OpCode opcode) {
     return opcode == OpCode::kJmp || opcode == OpCode::kJmpIf || opcode == OpCode::kRet ||
@@ -109,8 +132,21 @@ VerificationResult Verifier::Verify(const Module& module) {
         }
     }
 
+    std::unordered_set<std::string> exported_function_names;
     for (size_t fn_idx = 0; fn_idx < module.functions().size(); ++fn_idx) {
         const auto& function = module.functions()[fn_idx];
+        if (function.is_exported()) {
+            if (!IsValidExportedFunctionName(function.name())) {
+                result.status = Status::VerificationFailed(
+                    "exported function name must be a C identifier: " + function.name());
+                return result;
+            }
+            if (!exported_function_names.insert(function.name()).second) {
+                result.status = Status::VerificationFailed(
+                    "duplicate exported function name: " + function.name());
+                return result;
+            }
+        }
         if (function.ffi_binding().enabled) {
             if (function.ffi_binding().binding_index >= module.ffi_bindings().size()) {
                 result.status =
@@ -129,6 +165,21 @@ VerificationResult Verifier::Verify(const Module& module) {
         }
         if (function.param_count() > function.reg_count()) {
             result.status = Status::VerificationFailed("function param_count exceeds reg_count");
+            return result;
+        }
+        if (function.param_types().size() != function.param_count()) {
+            result.status = Status::VerificationFailed(
+                "function param_types size must equal param_count");
+            return result;
+        }
+        for (const auto param_type : function.param_types()) {
+            if (!IsValidBytecodeValueType(param_type)) {
+                result.status = Status::VerificationFailed("function param type out of range");
+                return result;
+            }
+        }
+        if (!IsValidBytecodeValueType(function.return_type())) {
+            result.status = Status::VerificationFailed("function return type out of range");
             return result;
         }
         const auto instructions = function.FlattenedInstructions();

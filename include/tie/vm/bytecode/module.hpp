@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -16,6 +17,46 @@ enum class ConstantType : uint8_t {
     kFloat64 = 1,
     kUtf8 = 2,
 };
+
+enum class BytecodeValueType : uint8_t {
+    kAny = 0,
+    kNull = 1,
+    kInt64 = 2,
+    kFloat64 = 3,
+    kBool = 4,
+    kObject = 5,
+    kPointer = 6,
+    kString = 7,
+    kClosure = 8,
+};
+
+[[nodiscard]] constexpr bool IsValidBytecodeValueType(BytecodeValueType type) {
+    return static_cast<uint8_t>(type) <= static_cast<uint8_t>(BytecodeValueType::kClosure);
+}
+
+[[nodiscard]] constexpr std::string_view BytecodeValueTypeName(BytecodeValueType type) {
+    switch (type) {
+        case BytecodeValueType::kAny:
+            return "any";
+        case BytecodeValueType::kNull:
+            return "null";
+        case BytecodeValueType::kInt64:
+            return "int64";
+        case BytecodeValueType::kFloat64:
+            return "float64";
+        case BytecodeValueType::kBool:
+            return "bool";
+        case BytecodeValueType::kObject:
+            return "object";
+        case BytecodeValueType::kPointer:
+            return "pointer";
+        case BytecodeValueType::kString:
+            return "string";
+        case BytecodeValueType::kClosure:
+            return "closure";
+    }
+    return "unknown";
+}
 
 struct Constant {
     ConstantType type = ConstantType::kInt64;
@@ -91,12 +132,21 @@ class Function {
   public:
     Function(
         std::string name, uint16_t reg_count, uint16_t param_count,
-        uint16_t upvalue_count = 0, bool is_vararg = false)
+        uint16_t upvalue_count = 0, bool is_vararg = false, bool is_exported = false,
+        std::vector<BytecodeValueType> param_types = {},
+        BytecodeValueType return_type = BytecodeValueType::kAny)
         : name_(std::move(name)),
           reg_count_(reg_count),
           param_count_(param_count),
           upvalue_count_(upvalue_count),
-          is_vararg_(is_vararg) {}
+          is_vararg_(is_vararg),
+          is_exported_(is_exported),
+          param_types_(std::move(param_types)),
+          return_type_(return_type) {
+        if (param_types_.empty()) {
+            param_types_.assign(param_count_, BytecodeValueType::kAny);
+        }
+    }
 
     BasicBlock& AddBlock(std::string name);
     [[nodiscard]] std::vector<Instruction> FlattenedInstructions() const;
@@ -106,8 +156,22 @@ class Function {
     [[nodiscard]] uint16_t param_count() const { return param_count_; }
     [[nodiscard]] uint16_t upvalue_count() const { return upvalue_count_; }
     [[nodiscard]] bool is_vararg() const { return is_vararg_; }
+    [[nodiscard]] bool is_exported() const { return is_exported_; }
+    [[nodiscard]] BytecodeValueType return_type() const { return return_type_; }
+    [[nodiscard]] const std::vector<BytecodeValueType>& param_types() const {
+        return param_types_;
+    }
+    [[nodiscard]] std::vector<BytecodeValueType>& param_types() { return param_types_; }
     void set_upvalue_count(uint16_t upvalue_count) { upvalue_count_ = upvalue_count; }
     void set_is_vararg(bool is_vararg) { is_vararg_ = is_vararg; }
+    void set_is_exported(bool is_exported) { is_exported_ = is_exported; }
+    void set_return_type(BytecodeValueType return_type) { return_type_ = return_type; }
+    void set_param_types(std::vector<BytecodeValueType> param_types) {
+        param_types_ = std::move(param_types);
+        if (param_types_.empty()) {
+            param_types_.assign(param_count_, BytecodeValueType::kAny);
+        }
+    }
     [[nodiscard]] const std::vector<BasicBlock>& blocks() const { return blocks_; }
     [[nodiscard]] std::vector<BasicBlock>& blocks() { return blocks_; }
     [[nodiscard]] const FunctionFfiBindingHeader& ffi_binding() const {
@@ -121,6 +185,9 @@ class Function {
     uint16_t param_count_ = 0;
     uint16_t upvalue_count_ = 0;
     bool is_vararg_ = false;
+    bool is_exported_ = false;
+    std::vector<BytecodeValueType> param_types_;
+    BytecodeValueType return_type_ = BytecodeValueType::kAny;
     std::vector<BasicBlock> blocks_;
     FunctionFfiBindingHeader ffi_binding_;
 };
@@ -131,7 +198,9 @@ class Module {
 
     Function& AddFunction(
         std::string name, uint16_t reg_count, uint16_t param_count,
-        uint16_t upvalue_count = 0, bool is_vararg = false);
+        uint16_t upvalue_count = 0, bool is_vararg = false, bool is_exported = false,
+        std::vector<BytecodeValueType> param_types = {},
+        BytecodeValueType return_type = BytecodeValueType::kAny);
     uint32_t AddConstant(Constant constant);
     void AddDebugLine(DebugLineEntry entry);
     uint32_t AddFfiLibraryPath(std::string path);

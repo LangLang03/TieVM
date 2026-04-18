@@ -53,6 +53,16 @@ TEST(BytecodeTest, VerifierRejectsInvalidCallWindowAndArgCount) {
     EXPECT_FALSE(result.status.ok());
 }
 
+TEST(BytecodeTest, VerifierRejectsInvalidExportedFunctionName) {
+    Module module("invalid.export.name");
+    auto& fn = module.AddFunction("demo.add", 4, 2, 0, false, true);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb).Add(0, 0, 1).Ret(0);
+    module.set_entry_function(0);
+    const auto result = Verifier::Verify(module);
+    EXPECT_FALSE(result.status.ok());
+}
+
 TEST(BytecodeTest, DeserializeRejectsTrailingGarbageBytes) {
     Module module = test::BuildAddModule(1, 2);
     auto bytes_or = Serializer::Serialize(module, false);
@@ -349,6 +359,124 @@ TEST(BytecodeTest, SerializeDeserializeClosureVarArgHeadersRoundTrip) {
     EXPECT_FALSE(parsed_or.value().functions()[0].is_vararg());
     EXPECT_EQ(parsed_or.value().functions()[1].upvalue_count(), 0u);
     EXPECT_TRUE(parsed_or.value().functions()[1].is_vararg());
+}
+
+TEST(BytecodeTest, SerializeDeserializeExportedFunctionHeaderRoundTrip) {
+    Module module("export.header");
+    auto& exported = module.AddFunction("sum_export", 4, 2, 0, false, true);
+    auto& exported_bb = exported.AddBlock("entry");
+    InstructionBuilder(exported_bb).Add(0, 0, 1).Ret(0);
+
+    auto& hidden = module.AddFunction("hidden_impl", 2, 0);
+    auto& hidden_bb = hidden.AddBlock("entry");
+    InstructionBuilder(hidden_bb).Ret(0);
+
+    module.set_entry_function(1);
+
+    auto bytes_or = Serializer::Serialize(module, false);
+    ASSERT_TRUE(bytes_or.ok()) << bytes_or.status().message();
+    auto parsed_or = Serializer::Deserialize(bytes_or.value());
+    ASSERT_TRUE(parsed_or.ok()) << parsed_or.status().message();
+
+    ASSERT_EQ(parsed_or.value().functions().size(), 2u);
+    EXPECT_TRUE(parsed_or.value().functions()[0].is_exported());
+    EXPECT_FALSE(parsed_or.value().functions()[1].is_exported());
+}
+
+TEST(BytecodeTest, SerializeDeserializeFunctionParamTypesRoundTrip) {
+    Module module("typed.param.header");
+    auto& typed = module.AddFunction(
+        "typed_fn",
+        6,
+        3,
+        0,
+        false,
+        false,
+        {
+            BytecodeValueType::kInt64,
+            BytecodeValueType::kBool,
+            BytecodeValueType::kString,
+        },
+        BytecodeValueType::kFloat64);
+    auto& bb = typed.AddBlock("entry");
+    InstructionBuilder(bb).Ret(0);
+    module.set_entry_function(0);
+
+    auto bytes_or = Serializer::Serialize(module, false);
+    ASSERT_TRUE(bytes_or.ok()) << bytes_or.status().message();
+    auto parsed_or = Serializer::Deserialize(bytes_or.value());
+    ASSERT_TRUE(parsed_or.ok()) << parsed_or.status().message();
+
+    ASSERT_EQ(parsed_or.value().functions().size(), 1u);
+    const auto& fn = parsed_or.value().functions()[0];
+    ASSERT_EQ(fn.param_types().size(), 3u);
+    EXPECT_EQ(fn.param_types()[0], BytecodeValueType::kInt64);
+    EXPECT_EQ(fn.param_types()[1], BytecodeValueType::kBool);
+    EXPECT_EQ(fn.param_types()[2], BytecodeValueType::kString);
+    EXPECT_EQ(fn.return_type(), BytecodeValueType::kFloat64);
+}
+
+TEST(BytecodeTest, VerifierRejectsParamTypeCountMismatch) {
+    Module module("typed.param.mismatch");
+    auto& fn = module.AddFunction("entry", 4, 2);
+    fn.set_param_types({BytecodeValueType::kInt64});
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb).Ret(0);
+    module.set_entry_function(0);
+
+    const auto verify = Verifier::Verify(module);
+    EXPECT_FALSE(verify.status.ok());
+}
+
+TEST(BytecodeTest, RuntimeRejectsCallArgumentTypeMismatch) {
+    Module module("typed.call.mismatch");
+    const auto c_text = module.AddConstant(Constant::Utf8("oops"));
+
+    auto& callee = module.AddFunction(
+        "need_int",
+        4,
+        1,
+        0,
+        false,
+        false,
+        {BytecodeValueType::kInt64});
+    auto& callee_bb = callee.AddBlock("entry");
+    InstructionBuilder(callee_bb).Ret(0);
+
+    auto& entry = module.AddFunction("entry", 6, 0);
+    auto& entry_bb = entry.AddBlock("entry");
+    InstructionBuilder(entry_bb).LoadK(1, c_text).Call(0, 0, 1).Ret(0);
+    module.set_entry_function(1);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    EXPECT_FALSE(result_or.ok());
+    EXPECT_NE(
+        result_or.status().message().find("function argument type mismatch"),
+        std::string::npos);
+}
+
+TEST(BytecodeTest, RuntimeRejectsReturnTypeMismatch) {
+    Module module("typed.return.mismatch");
+    auto& fn = module.AddFunction(
+        "entry",
+        4,
+        0,
+        0,
+        false,
+        false,
+        {},
+        BytecodeValueType::kBool);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb).LoadK(0, module.AddConstant(Constant::Int64(7))).Ret(0);
+    module.set_entry_function(0);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(module);
+    EXPECT_FALSE(result_or.ok());
+    EXPECT_NE(
+        result_or.status().message().find("function return type mismatch"),
+        std::string::npos);
 }
 
 TEST(BytecodeTest, SerializeDeserializeClassMetadataRoundTrip) {

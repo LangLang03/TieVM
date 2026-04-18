@@ -320,6 +320,120 @@ TEST(AotTest, CompileTryCatchFinallyAndThrowOpcode) {
     EXPECT_NE(text.find("2"), std::string::npos);
 }
 
+TEST(AotTest, CompileSharedLibraryExportsFunctionsAndGeneratesHeader) {
+    if (!HasClang()) {
+        GTEST_SKIP() << "clang not found";
+    }
+#if defined(_WIN32)
+    GTEST_SKIP() << "shared export integration test not enabled on windows yet";
+#else
+    Module module("aot.export.sum");
+    auto& sum = module.AddFunction(
+        "sum_export",
+        4,
+        2,
+        0,
+        false,
+        true,
+        {BytecodeValueType::kInt64, BytecodeValueType::kBool},
+        BytecodeValueType::kInt64);
+    auto& sum_bb = sum.AddBlock("entry");
+    InstructionBuilder(sum_bb).Add(0, 0, 1).Ret(0);
+    module.set_entry_function(0);
+
+    const auto input = test::TempPath("aot_export_sum.tbc");
+    ASSERT_TRUE(Serializer::SerializeToFile(module, input).ok());
+
+#if defined(__APPLE__)
+    const auto shared = test::TempPath("libaot_export_sum.dylib");
+#else
+    const auto shared = test::TempPath("libaot_export_sum.so");
+#endif
+    const auto header = test::TempPath("aot_export_sum.h");
+    const auto client_src = test::TempPath("aot_export_client.c");
+    const auto client_exe = test::TempPath("aot_export_client.out");
+
+    AotCompileOptions options;
+    options.input_path = input;
+    options.output_executable = shared;
+    options.output_kind = AotOutputKind::kSharedLibrary;
+    options.emit_header = header;
+
+    AotCompiler compiler;
+    auto result_or = compiler.Compile(options);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    ASSERT_TRUE(std::filesystem::exists(shared));
+    ASSERT_TRUE(std::filesystem::exists(header));
+
+    const auto& result = result_or.value();
+    EXPECT_EQ(result.output_kind, AotOutputKind::kSharedLibrary);
+    ASSERT_EQ(result.exported_functions.size(), 1u);
+    EXPECT_EQ(result.exported_functions[0], "sum_export");
+    ASSERT_TRUE(result.emitted_header.has_value());
+    EXPECT_EQ(result.emitted_header.value(), header);
+
+    const auto header_text = ReadTextFile(header);
+    EXPECT_NE(header_text.find("sum_export"), std::string::npos);
+    EXPECT_NE(
+        header_text.find("int64_t sum_export(int64_t arg0, bool arg1)"),
+        std::string::npos);
+
+    std::ofstream out(client_src, std::ios::trunc);
+    ASSERT_TRUE(out.is_open());
+    out << "#include <stdint.h>\n";
+    out << "#include \"" << header.string() << "\"\n";
+    out << "int main(void) {\n";
+    out << "  int64_t result = sum_export(41, true);\n";
+    out << "  return (result == 42) ? 0 : 3;\n";
+    out << "}\n";
+    out.close();
+
+    const std::string compile_cmd =
+        std::string("clang ") + QuoteShellArg(client_src.string()) + " " +
+        QuoteShellArg(shared.string()) + " " +
+        QuoteShellArg("-Wl,-rpath," + shared.parent_path().string()) + " -o " +
+        QuoteShellArg(client_exe.string());
+    const int compile_rc = std::system(compile_cmd.c_str());
+    ASSERT_EQ(compile_rc, 0);
+
+    const std::string run_cmd = QuoteShellArg(client_exe.string()) + " >/dev/null 2>&1";
+    const int run_rc = std::system(run_cmd.c_str());
+    ASSERT_EQ(run_rc, 0);
+#endif
+}
+
+TEST(AotTest, CompileSharedLibraryRequiresExportedFunction) {
+    if (!HasClang()) {
+        GTEST_SKIP() << "clang not found";
+    }
+
+    Module module("aot.shared.noexport");
+    auto& fn = module.AddFunction("hidden_impl", 2, 0);
+    auto& bb = fn.AddBlock("entry");
+    InstructionBuilder(bb).Ret(0);
+    module.set_entry_function(0);
+
+    const auto input = test::TempPath("aot_shared_noexport.tbc");
+    ASSERT_TRUE(Serializer::SerializeToFile(module, input).ok());
+
+#if defined(_WIN32)
+    const auto shared = test::TempPath("aot_shared_noexport.dll");
+#elif defined(__APPLE__)
+    const auto shared = test::TempPath("aot_shared_noexport.dylib");
+#else
+    const auto shared = test::TempPath("aot_shared_noexport.so");
+#endif
+
+    AotCompileOptions options;
+    options.input_path = input;
+    options.output_executable = shared;
+    options.output_kind = AotOutputKind::kSharedLibrary;
+
+    AotCompiler compiler;
+    auto result_or = compiler.Compile(options);
+    EXPECT_FALSE(result_or.ok());
+}
+
 TEST(AotTest, CompileOopInvokeWithC3DispatchAndRun) {
     if (!HasClang()) {
         GTEST_SKIP() << "clang not found";

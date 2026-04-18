@@ -21,6 +21,52 @@ uint64_t DebugLineKey(uint32_t function_index, uint32_t instruction_index) {
 int32_t SignedU32(uint32_t value) { return static_cast<int32_t>(value); }
 constexpr uint32_t kInvalidTryTarget = 0xFFFFFFFFu;
 
+std::string ValueTypeName(Value::Type type) {
+    switch (type) {
+        case Value::Type::kNull:
+            return "null";
+        case Value::Type::kInt64:
+            return "int64";
+        case Value::Type::kFloat64:
+            return "float64";
+        case Value::Type::kBool:
+            return "bool";
+        case Value::Type::kObject:
+            return "object";
+        case Value::Type::kPointer:
+            return "pointer";
+        case Value::Type::kString:
+            return "string";
+        case Value::Type::kClosure:
+            return "closure";
+    }
+    return "unknown";
+}
+
+bool ValueMatchesType(const Value& value, BytecodeValueType expected) {
+    switch (expected) {
+        case BytecodeValueType::kAny:
+            return true;
+        case BytecodeValueType::kNull:
+            return value.type() == Value::Type::kNull;
+        case BytecodeValueType::kInt64:
+            return value.type() == Value::Type::kInt64;
+        case BytecodeValueType::kFloat64:
+            return value.type() == Value::Type::kFloat64;
+        case BytecodeValueType::kBool:
+            return value.type() == Value::Type::kBool;
+        case BytecodeValueType::kObject:
+            return value.type() == Value::Type::kObject;
+        case BytecodeValueType::kPointer:
+            return value.type() == Value::Type::kPointer;
+        case BytecodeValueType::kString:
+            return value.type() == Value::Type::kString;
+        case BytecodeValueType::kClosure:
+            return value.type() == Value::Type::kClosure;
+    }
+    return false;
+}
+
 }  // namespace
 
 StatusOr<Value> VmThread::Execute(
@@ -74,6 +120,16 @@ StatusOr<Value> VmThread::ExecuteFunction(
     }
     if (function.is_vararg() && args.size() < function.param_count()) {
         return Status::InvalidArgument("vararg function argument count mismatch");
+    }
+    for (uint32_t i = 0; i < function.param_count(); ++i) {
+        const auto expected = function.param_types()[i];
+        if (!ValueMatchesType(args[i], expected)) {
+            return Status::InvalidArgument(
+                "function argument type mismatch module=" + module.name() + " function=" +
+                function.name() + " index=" + std::to_string(i) + " expected=" +
+                std::string(BytecodeValueTypeName(expected)) + " got=" +
+                ValueTypeName(args[i].type()));
+        }
     }
 
     if (scratch.frames.size() <= frame_depth) {
@@ -669,11 +725,32 @@ StatusOr<Value> VmThread::ExecuteFunction(
                     break;
                 }
                 case OpCode::kRet:
-                    return reg_const(inst.a);
+                {
+                    const auto& ret_value = reg_const(inst.a);
+                    const auto expected_return = function.return_type();
+                    if (!ValueMatchesType(ret_value, expected_return)) {
+                        return Status::InvalidArgument(
+                            "function return type mismatch module=" + module.name() + " function=" +
+                            function.name() + " expected=" +
+                            std::string(BytecodeValueTypeName(expected_return)) + " got=" +
+                            ValueTypeName(ret_value.type()));
+                    }
+                    return ret_value;
+                }
                 case OpCode::kThrow:
                     throw VmException("vm throw: " + reg_const(inst.a).ToString());
                 case OpCode::kHalt:
-                    return Value::Null();
+                {
+                    const auto halted = Value::Null();
+                    const auto expected_return = function.return_type();
+                    if (!ValueMatchesType(halted, expected_return)) {
+                        return Status::InvalidArgument(
+                            "function return type mismatch module=" + module.name() + " function=" +
+                            function.name() + " expected=" +
+                            std::string(BytecodeValueTypeName(expected_return)) + " got=null");
+                    }
+                    return halted;
+                }
                 case OpCode::kNewObject: {
                     if (inst.b >= module.constants().size() ||
                         module.constants()[inst.b].type != ConstantType::kUtf8) {

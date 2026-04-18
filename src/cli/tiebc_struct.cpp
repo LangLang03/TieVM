@@ -41,8 +41,9 @@ int PrintTbcStruct() {
     std::cout << "  constants:\n";
     std::cout << "    type(u8) + payload (i64/f64/utf8-string)\n";
     std::cout << "  functions:\n";
-    std::cout << "    name(string), reg_count(u16), param_count(u16), ffi-header, "
-                 "upvalue_count(u16), is_vararg(u8), inst_count(u32)\n";
+    std::cout << "    name(string), reg_count(u16), param_count(u16), "
+                 "param_type_count(u16)+param_types(u8[]), return_type(u8), ffi-header, "
+                 "upvalue_count(u16), is_vararg(u8), is_exported(u8), inst_count(u32)\n";
     std::cout << "    instructions         = fixed 16 bytes each: opcode(u8), flags(u8),"
                  " reserved(u16), a(u32), b(u32), c(u32)\n";
     std::cout << "  optional debug section (when flag enabled):\n";

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -35,6 +36,54 @@ struct LoadedAotModule {
     std::vector<std::filesystem::path> linked_libraries;
     std::optional<std::filesystem::path> temp_materialized_root;
 };
+
+struct ExportedFunctionInfo {
+    uint32_t function_index = 0;
+    std::string name;
+    uint16_t param_count = 0;
+    bool is_vararg = false;
+    std::vector<BytecodeValueType> param_types;
+    BytecodeValueType return_type = BytecodeValueType::kAny;
+};
+
+std::vector<ExportedFunctionInfo> CollectExportedFunctions(const Module& module) {
+    std::vector<ExportedFunctionInfo> out;
+    out.reserve(module.functions().size());
+    for (size_t i = 0; i < module.functions().size(); ++i) {
+        const auto& function = module.functions()[i];
+        if (!function.is_exported()) {
+            continue;
+        }
+        out.push_back(ExportedFunctionInfo{
+            static_cast<uint32_t>(i),
+            function.name(),
+            function.param_count(),
+            function.is_vararg(),
+            function.param_types(),
+            function.return_type()});
+    }
+    return out;
+}
+
+bool IsWindowsTarget(const AotCompileOptions& options) {
+    if (options.target_triple.has_value()) {
+        auto triple = *options.target_triple;
+        std::transform(
+            triple.begin(), triple.end(), triple.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (triple.find("windows") != std::string::npos ||
+            triple.find("mingw") != std::string::npos ||
+            triple.find("msvc") != std::string::npos) {
+            return true;
+        }
+        return false;
+    }
+#if defined(_WIN32)
+    return true;
+#else
+    return false;
+#endif
+}
 
 int32_t SignedU32(uint32_t value) { return static_cast<int32_t>(value); }
 constexpr uint32_t kInvalidTryTarget = 0xFFFFFFFFu;
@@ -459,9 +508,124 @@ StatusOr<std::string> AbiTypeToLlvm(const AbiType& type, bool is_return) {
     return AotInvalid("FFI_SIGNATURE", "unknown abi value kind");
 }
 
+StatusOr<std::optional<uint8_t>> BytecodeTypeToAotTag(BytecodeValueType type) {
+    switch (type) {
+        case BytecodeValueType::kAny:
+            return std::optional<uint8_t>{};
+        case BytecodeValueType::kNull:
+            return std::optional<uint8_t>{static_cast<uint8_t>(0)};
+        case BytecodeValueType::kInt64:
+            return std::optional<uint8_t>{static_cast<uint8_t>(1)};
+        case BytecodeValueType::kFloat64:
+            return std::optional<uint8_t>{static_cast<uint8_t>(2)};
+        case BytecodeValueType::kBool:
+            return std::optional<uint8_t>{static_cast<uint8_t>(3)};
+        case BytecodeValueType::kObject:
+            return std::optional<uint8_t>{static_cast<uint8_t>(4)};
+        case BytecodeValueType::kPointer:
+        case BytecodeValueType::kString:
+            return std::optional<uint8_t>{static_cast<uint8_t>(5)};
+        case BytecodeValueType::kClosure:
+            return std::optional<uint8_t>{static_cast<uint8_t>(7)};
+    }
+    return AotInvalid("TYPE_SIGNATURE", "unknown bytecode function param type");
+}
+
+StatusOr<std::string> BytecodeTypeToExportParamLlvmType(BytecodeValueType type) {
+    switch (type) {
+        case BytecodeValueType::kAny:
+        case BytecodeValueType::kNull:
+            return std::string("%TieValue");
+        case BytecodeValueType::kInt64:
+        case BytecodeValueType::kObject:
+        case BytecodeValueType::kClosure:
+            return std::string("i64");
+        case BytecodeValueType::kFloat64:
+            return std::string("double");
+        case BytecodeValueType::kBool:
+            return std::string("i1");
+        case BytecodeValueType::kPointer:
+        case BytecodeValueType::kString:
+            return std::string("ptr");
+    }
+    return AotInvalid("TYPE_SIGNATURE", "unknown bytecode function param type");
+}
+
+StatusOr<std::string> BytecodeTypeToExportParamCType(BytecodeValueType type) {
+    switch (type) {
+        case BytecodeValueType::kAny:
+        case BytecodeValueType::kNull:
+            return std::string("tievm_aot_value");
+        case BytecodeValueType::kInt64:
+            return std::string("int64_t");
+        case BytecodeValueType::kFloat64:
+            return std::string("double");
+        case BytecodeValueType::kBool:
+            return std::string("bool");
+        case BytecodeValueType::kObject:
+        case BytecodeValueType::kClosure:
+            return std::string("uint64_t");
+        case BytecodeValueType::kPointer:
+            return std::string("void*");
+        case BytecodeValueType::kString:
+            return std::string("const char*");
+    }
+    return AotInvalid("TYPE_SIGNATURE", "unknown bytecode function param type");
+}
+
+StatusOr<std::string> BytecodeTypeToExportReturnLlvmType(BytecodeValueType type) {
+    switch (type) {
+        case BytecodeValueType::kAny:
+            return std::string("%TieValue");
+        case BytecodeValueType::kNull:
+            return std::string("void");
+        case BytecodeValueType::kInt64:
+        case BytecodeValueType::kObject:
+        case BytecodeValueType::kClosure:
+            return std::string("i64");
+        case BytecodeValueType::kFloat64:
+            return std::string("double");
+        case BytecodeValueType::kBool:
+            return std::string("i1");
+        case BytecodeValueType::kPointer:
+        case BytecodeValueType::kString:
+            return std::string("ptr");
+    }
+    return AotInvalid("TYPE_SIGNATURE", "unknown bytecode function return type");
+}
+
+StatusOr<std::string> BytecodeTypeToExportReturnCType(BytecodeValueType type) {
+    switch (type) {
+        case BytecodeValueType::kAny:
+            return std::string("tievm_aot_value");
+        case BytecodeValueType::kNull:
+            return std::string("void");
+        case BytecodeValueType::kInt64:
+            return std::string("int64_t");
+        case BytecodeValueType::kFloat64:
+            return std::string("double");
+        case BytecodeValueType::kBool:
+            return std::string("bool");
+        case BytecodeValueType::kObject:
+        case BytecodeValueType::kClosure:
+            return std::string("uint64_t");
+        case BytecodeValueType::kPointer:
+            return std::string("void*");
+        case BytecodeValueType::kString:
+            return std::string("const char*");
+    }
+    return AotInvalid("TYPE_SIGNATURE", "unknown bytecode function return type");
+}
+
 class LlvmIrBuilder {
   public:
-    explicit LlvmIrBuilder(const LoadedAotModule& loaded) : loaded_(loaded), module_(loaded.module) {}
+    LlvmIrBuilder(
+        const LoadedAotModule& loaded, AotOutputKind output_kind,
+        const std::vector<ExportedFunctionInfo>& exported_functions)
+        : loaded_(loaded),
+          module_(loaded.module),
+          output_kind_(output_kind),
+          exported_functions_(exported_functions) {}
 
     StatusOr<std::string> Build() {
         auto ffi_status = BuildFfiDecls();
@@ -477,7 +641,9 @@ class LlvmIrBuilder {
         out_ << "%TieValue = type { i8, i64 }\n\n";
         out_ << "%TieClosureHeader = type { i32, i32 }\n\n";
         out_ << "%TieAotObject = type { i32 }\n\n";
-        out_ << "declare i32 @printf(ptr, ...)\n";
+        if (output_kind_ == AotOutputKind::kExecutable) {
+            out_ << "declare i32 @printf(ptr, ...)\n";
+        }
         out_ << "declare i64 @strlen(ptr)\n";
         out_ << "declare ptr @malloc(i64)\n";
         out_ << "declare ptr @memcpy(ptr, ptr, i64)\n";
@@ -487,7 +653,9 @@ class LlvmIrBuilder {
         }
         out_ << "\n";
 
-        out_ << "@.tievm_fmt_i64 = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\", align 1\n\n";
+        if (output_kind_ == AotOutputKind::kExecutable) {
+            out_ << "@.tievm_fmt_i64 = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\", align 1\n\n";
+        }
 
         out_ << "define i1 @tievm_aot_is_truthy(i8 %tag, i64 %bits) {\n"
              << "entry:\n"
@@ -527,16 +695,23 @@ class LlvmIrBuilder {
             out_ << "\n";
         }
 
-        const auto entry_index = module_.entry_function();
-        out_ << "define i32 @main(i32 %argc, ptr %argv) {\n"
-             << "entry:\n"
-             << "  %ret = call %TieValue @tievm_fn_" << entry_index
-             << "(ptr null, i32 0, ptr null)\n"
-             << "  %ret_bits = extractvalue %TieValue %ret, 1\n"
-             << "  %fmt = getelementptr inbounds [6 x i8], ptr @.tievm_fmt_i64, i64 0, i64 0\n"
-             << "  %printed = call i32 (ptr, ...) @printf(ptr %fmt, i64 %ret_bits)\n"
-             << "  ret i32 0\n"
-             << "}\n";
+        auto export_status = EmitExportWrappers();
+        if (!export_status.ok()) {
+            return export_status;
+        }
+
+        if (output_kind_ == AotOutputKind::kExecutable) {
+            const auto entry_index = module_.entry_function();
+            out_ << "define i32 @main(i32 %argc, ptr %argv) {\n"
+                 << "entry:\n"
+                 << "  %ret = call %TieValue @tievm_fn_" << entry_index
+                 << "(ptr null, i32 0, ptr null)\n"
+                 << "  %ret_bits = extractvalue %TieValue %ret, 1\n"
+                 << "  %fmt = getelementptr inbounds [6 x i8], ptr @.tievm_fmt_i64, i64 0, i64 0\n"
+                 << "  %printed = call i32 (ptr, ...) @printf(ptr %fmt, i64 %ret_bits)\n"
+                 << "  ret i32 0\n"
+                 << "}\n";
+        }
 
         return out_.str();
     }
@@ -597,6 +772,193 @@ class LlvmIrBuilder {
             func_ << "    i32 " << i << ", label %bb" << i << "\n";
         }
         func_ << "  ]\n";
+    }
+
+    Status EmitExportWrappers() {
+        for (const auto& exported : exported_functions_) {
+            if (exported.function_index >= module_.functions().size()) {
+                return AotInvalid(
+                    "EXPORT_INDEX",
+                    "exported function index out of range",
+                    module_.name(),
+                    exported.name);
+            }
+            const auto& function = module_.functions()[exported.function_index];
+            if (exported.param_types.size() != exported.param_count) {
+                return AotInvalid(
+                    "EXPORT_SIGNATURE",
+                    "exported function param type count mismatch",
+                    module_.name(),
+                    exported.name);
+            }
+            if (function.param_types().size() != function.param_count()) {
+                return AotInvalid(
+                    "EXPORT_SIGNATURE",
+                    "function param type metadata mismatch",
+                    module_.name(),
+                    exported.name);
+            }
+
+            std::vector<std::string> llvm_param_types;
+            llvm_param_types.reserve(exported.param_types.size());
+            for (const auto param_type : exported.param_types) {
+                auto llvm_type_or = BytecodeTypeToExportParamLlvmType(param_type);
+                if (!llvm_type_or.ok()) {
+                    return llvm_type_or.status();
+                }
+                llvm_param_types.push_back(llvm_type_or.value());
+            }
+            auto llvm_return_type_or = BytecodeTypeToExportReturnLlvmType(exported.return_type);
+            if (!llvm_return_type_or.ok()) {
+                return llvm_return_type_or.status();
+            }
+            const auto& llvm_return_type = llvm_return_type_or.value();
+
+            out_ << "define " << llvm_return_type << " @\"" << EscapeLlvmQuotedIdent(exported.name)
+                 << "\"(";
+            for (size_t i = 0; i < llvm_param_types.size(); ++i) {
+                if (i > 0) {
+                    out_ << ", ";
+                }
+                out_ << llvm_param_types[i] << " %arg" << i;
+            }
+            out_ << ") {\n";
+            out_ << "entry:\n";
+
+            std::string args_ptr = "null";
+            if (exported.param_count > 0) {
+                out_ << "  %args_buf = alloca [" << exported.param_count << " x %TieValue], align 8\n";
+                uint32_t wrapper_tmp_id = 0;
+                auto wrapper_tmp = [&]() { return "%ew" + std::to_string(wrapper_tmp_id++); };
+                auto emit_make_value = [&](std::string_view tag_expr, std::string_view bits_expr) {
+                    const auto step1 = wrapper_tmp();
+                    out_ << "  " << step1 << " = insertvalue %TieValue poison, " << tag_expr
+                         << ", 0\n";
+                    const auto step2 = wrapper_tmp();
+                    out_ << "  " << step2 << " = insertvalue %TieValue " << step1 << ", "
+                         << bits_expr << ", 1\n";
+                    return step2;
+                };
+
+                for (uint16_t i = 0; i < exported.param_count; ++i) {
+                    const auto param_type = exported.param_types[i];
+                    const std::string arg_name = "%arg" + std::to_string(i);
+                    std::string tie_value;
+                    switch (param_type) {
+                        case BytecodeValueType::kAny:
+                        case BytecodeValueType::kNull:
+                            tie_value = arg_name;
+                            break;
+                        case BytecodeValueType::kInt64:
+                            tie_value = emit_make_value("i8 1", "i64 " + arg_name);
+                            break;
+                        case BytecodeValueType::kFloat64: {
+                            const auto bits = wrapper_tmp();
+                            out_ << "  " << bits << " = bitcast double " << arg_name << " to i64\n";
+                            tie_value = emit_make_value("i8 2", "i64 " + bits);
+                            break;
+                        }
+                        case BytecodeValueType::kBool: {
+                            const auto bits = wrapper_tmp();
+                            out_ << "  " << bits << " = zext i1 " << arg_name << " to i64\n";
+                            tie_value = emit_make_value("i8 3", "i64 " + bits);
+                            break;
+                        }
+                        case BytecodeValueType::kObject:
+                            tie_value = emit_make_value("i8 4", "i64 " + arg_name);
+                            break;
+                        case BytecodeValueType::kPointer:
+                        case BytecodeValueType::kString: {
+                            const auto bits = wrapper_tmp();
+                            out_ << "  " << bits << " = ptrtoint ptr " << arg_name << " to i64\n";
+                            tie_value = emit_make_value("i8 5", "i64 " + bits);
+                            break;
+                        }
+                        case BytecodeValueType::kClosure:
+                            tie_value = emit_make_value("i8 7", "i64 " + arg_name);
+                            break;
+                    }
+
+                    const auto slot = wrapper_tmp();
+                    out_ << "  " << slot
+                         << " = getelementptr inbounds [" << exported.param_count
+                         << " x %TieValue], ptr %args_buf, i64 0, i64 " << i << "\n";
+                    out_ << "  store %TieValue " << tie_value << ", ptr " << slot << ", align 8\n";
+                }
+
+                args_ptr = "%args_ptr";
+                out_ << "  %args_ptr = getelementptr inbounds [" << exported.param_count
+                     << " x %TieValue], ptr %args_buf, i64 0, i64 0\n";
+            }
+
+            out_ << "  %ret = call %TieValue " << FunctionName(exported.function_index)
+                 << "(ptr " << args_ptr << ", i32 "
+                 << static_cast<uint32_t>(exported.param_count) << ", ptr null)\n";
+
+            auto expected_tag_or = BytecodeTypeToAotTag(exported.return_type);
+            if (!expected_tag_or.ok()) {
+                return expected_tag_or.status();
+            }
+            if (expected_tag_or.value().has_value()) {
+                const auto ret_tag = Temp();
+                const auto ret_tag_ok = Temp();
+                const auto ret_type_ok_label = Label("export_ret_type_ok");
+                const auto ret_type_bad_label = Label("export_ret_type_bad");
+                out_ << "  " << ret_tag << " = extractvalue %TieValue %ret, 0\n";
+                out_ << "  " << ret_tag_ok << " = icmp eq i8 " << ret_tag << ", "
+                     << static_cast<uint32_t>(*expected_tag_or.value()) << "\n";
+                out_ << "  br i1 " << ret_tag_ok << ", label %" << ret_type_ok_label
+                     << ", label %" << ret_type_bad_label << "\n";
+                out_ << ret_type_bad_label << ":\n";
+                out_ << "  call void @abort()\n";
+                out_ << "  unreachable\n";
+                out_ << ret_type_ok_label << ":\n";
+            }
+
+            switch (exported.return_type) {
+                case BytecodeValueType::kAny:
+                    out_ << "  ret %TieValue %ret\n";
+                    break;
+                case BytecodeValueType::kNull:
+                    out_ << "  ret void\n";
+                    break;
+                case BytecodeValueType::kInt64:
+                case BytecodeValueType::kObject:
+                case BytecodeValueType::kClosure: {
+                    const auto ret_bits = Temp();
+                    out_ << "  " << ret_bits << " = extractvalue %TieValue %ret, 1\n";
+                    out_ << "  ret i64 " << ret_bits << "\n";
+                    break;
+                }
+                case BytecodeValueType::kFloat64: {
+                    const auto ret_bits = Temp();
+                    const auto ret_f64 = Temp();
+                    out_ << "  " << ret_bits << " = extractvalue %TieValue %ret, 1\n";
+                    out_ << "  " << ret_f64 << " = bitcast i64 " << ret_bits << " to double\n";
+                    out_ << "  ret double " << ret_f64 << "\n";
+                    break;
+                }
+                case BytecodeValueType::kBool: {
+                    const auto ret_bits = Temp();
+                    const auto ret_bool = Temp();
+                    out_ << "  " << ret_bits << " = extractvalue %TieValue %ret, 1\n";
+                    out_ << "  " << ret_bool << " = icmp ne i64 " << ret_bits << ", 0\n";
+                    out_ << "  ret i1 " << ret_bool << "\n";
+                    break;
+                }
+                case BytecodeValueType::kPointer:
+                case BytecodeValueType::kString: {
+                    const auto ret_bits = Temp();
+                    const auto ret_ptr = Temp();
+                    out_ << "  " << ret_bits << " = extractvalue %TieValue %ret, 1\n";
+                    out_ << "  " << ret_ptr << " = inttoptr i64 " << ret_bits << " to ptr\n";
+                    out_ << "  ret ptr " << ret_ptr << "\n";
+                    break;
+                }
+            }
+            out_ << "}\n\n";
+        }
+        return Status::Ok();
     }
 
     Status BuildClassMetadata() {
@@ -893,7 +1255,7 @@ class LlvmIrBuilder {
             }
         }
 
-        func_ << "define %TieValue " << FunctionName(fn_idx)
+        func_ << "define internal %TieValue " << FunctionName(fn_idx)
               << "(ptr %args, i32 %argc, ptr %closure) {\n";
         func_ << "entry:\n";
         func_ << "  %regs = alloca [" << function.reg_count() << " x %TieValue], align 8\n";
@@ -951,6 +1313,24 @@ class LlvmIrBuilder {
             const auto arg_val = Temp();
             func_ << "  " << arg_val << " = load %TieValue, ptr " << arg_ptr << ", align 8\n";
             StoreReg(function.reg_count(), i, arg_val);
+        }
+
+        for (uint32_t i = 0; i < function.param_count(); ++i) {
+            auto expected_tag_or = BytecodeTypeToAotTag(function.param_types()[i]);
+            if (!expected_tag_or.ok()) {
+                return expected_tag_or.status();
+            }
+            if (!expected_tag_or.value().has_value()) {
+                continue;
+            }
+            const auto arg = LoadReg(function.reg_count(), i);
+            const auto type_ok = Temp();
+            const auto type_ok_label = Label("arg_type_ok");
+            func_ << "  " << type_ok << " = icmp eq i8 " << arg.tag << ", "
+                  << static_cast<uint32_t>(*expected_tag_or.value()) << "\n";
+            func_ << "  br i1 " << type_ok << ", label %" << type_ok_label
+                  << ", label %panic\n";
+            func_ << type_ok_label << ":\n";
         }
 
         func_ << "  br label %bb0\n";
@@ -2086,6 +2466,8 @@ class LlvmIrBuilder {
 
     const LoadedAotModule& loaded_;
     const Module& module_;
+    AotOutputKind output_kind_;
+    const std::vector<ExportedFunctionInfo>& exported_functions_;
     std::ostringstream out_;
     std::ostringstream func_;
     int temp_id_ = 0;
@@ -2117,6 +2499,78 @@ Status WriteTextFile(const std::filesystem::path& path, const std::string& text)
             "[AOT] FILE_IO msg=failed writing output file: " + path.string());
     }
     return Status::Ok();
+}
+
+StatusOr<std::filesystem::path> ResolveHeaderPath(const AotCompileOptions& options) {
+    if (options.emit_header.has_value()) {
+        return options.emit_header.value();
+    }
+    if (options.output_executable.empty()) {
+        return Status::InvalidArgument("[AOT] INPUT msg=output path is empty");
+    }
+    auto path = options.output_executable;
+    path.replace_extension(".h");
+    return path;
+}
+
+StatusOr<std::string> BuildExportHeader(
+    const std::string& module_name,
+    const std::vector<ExportedFunctionInfo>& exported_functions) {
+    std::ostringstream out;
+    out << "#pragma once\n\n";
+    out << "#include <stdint.h>\n\n";
+    out << "#include <stdbool.h>\n\n";
+    out << "#if defined(_WIN32) || defined(__CYGWIN__)\n";
+    out << "#  ifdef TIEVM_AOT_IMPORT\n";
+    out << "#    define TIEVM_AOT_API __declspec(dllimport)\n";
+    out << "#  else\n";
+    out << "#    define TIEVM_AOT_API\n";
+    out << "#  endif\n";
+    out << "#else\n";
+    out << "#  define TIEVM_AOT_API __attribute__((visibility(\"default\")))\n";
+    out << "#endif\n\n";
+    out << "#ifdef __cplusplus\n";
+    out << "extern \"C\" {\n";
+    out << "#endif\n\n";
+    out << "typedef struct tievm_aot_value {\n";
+    out << "    uint8_t tag;\n";
+    out << "    int64_t bits;\n";
+    out << "} tievm_aot_value;\n\n";
+    out << "/* module: " << module_name << " */\n";
+    for (const auto& exported : exported_functions) {
+        if (exported.param_types.size() != exported.param_count) {
+            return AotInvalid(
+                "EXPORT_SIGNATURE",
+                "exported function param type count mismatch while generating header",
+                module_name,
+                exported.name);
+        }
+        auto ret_type_or = BytecodeTypeToExportReturnCType(exported.return_type);
+        if (!ret_type_or.ok()) {
+            return ret_type_or.status();
+        }
+        out << "TIEVM_AOT_API " << ret_type_or.value() << " " << exported.name << "(";
+        if (exported.param_count == 0) {
+            out << "void";
+        } else {
+            for (uint16_t i = 0; i < exported.param_count; ++i) {
+                auto c_type_or = BytecodeTypeToExportParamCType(exported.param_types[i]);
+                if (!c_type_or.ok()) {
+                    return c_type_or.status();
+                }
+                if (i > 0) {
+                    out << ", ";
+                }
+                out << c_type_or.value() << " arg" << i;
+            }
+        }
+        out << ");\n";
+    }
+    out << "\n";
+    out << "#ifdef __cplusplus\n";
+    out << "}  // extern \"C\"\n";
+    out << "#endif\n";
+    return out.str();
 }
 
 StatusOr<std::filesystem::path> ResolveIrPath(const AotCompileOptions& options) {
@@ -2151,6 +2605,9 @@ Status BuildObjectFile(
     cmd.push_back("-o");
     cmd.push_back(obj_path.string());
     cmd.push_back("-" + options.opt_level);
+    if (options.output_kind == AotOutputKind::kSharedLibrary && !IsWindowsTarget(options)) {
+        cmd.push_back("-fPIC");
+    }
     if (options.target_triple.has_value()) {
         cmd.push_back("--target=" + *options.target_triple);
     }
@@ -2161,22 +2618,25 @@ Status BuildObjectFile(
     return RunCommand(cmd);
 }
 
-Status LinkExecutable(
+Status LinkArtifact(
     const AotCompileOptions& options, const std::filesystem::path& obj_path,
-    const std::filesystem::path& output_exe,
+    const std::filesystem::path& output_path,
     const std::vector<std::filesystem::path>& linked_libraries) {
     std::error_code ec;
-    std::filesystem::create_directories(output_exe.parent_path(), ec);
+    std::filesystem::create_directories(output_path.parent_path(), ec);
     if (ec) {
         return Status::SerializationError(
-            "[AOT] FILE_IO msg=failed creating executable output directory: " + ec.message());
+            "[AOT] FILE_IO msg=failed creating output directory: " + ec.message());
     }
 
     std::vector<std::string> cmd;
     cmd.push_back(options.clang_path);
     cmd.push_back(obj_path.string());
+    if (options.output_kind == AotOutputKind::kSharedLibrary) {
+        cmd.push_back("-shared");
+    }
     cmd.push_back("-o");
-    cmd.push_back(output_exe.string());
+    cmd.push_back(output_path.string());
     if (options.target_triple.has_value()) {
         cmd.push_back("--target=" + *options.target_triple);
     }
@@ -2197,11 +2657,15 @@ StatusOr<AotCompileResult> AotCompiler::Compile(const AotCompileOptions& options
         return Status::InvalidArgument("[AOT] INPUT msg=input path is empty");
     }
     if (options.output_executable.empty()) {
-        return Status::InvalidArgument("[AOT] INPUT msg=output executable path is empty");
+        return Status::InvalidArgument("[AOT] INPUT msg=output path is empty");
     }
     if (options.opt_level != "O0" && options.opt_level != "O1" && options.opt_level != "O2" &&
         options.opt_level != "O3") {
         return Status::InvalidArgument("[AOT] INPUT msg=opt level must be one of O0/O1/O2/O3");
+    }
+    if (options.output_kind != AotOutputKind::kExecutable &&
+        options.output_kind != AotOutputKind::kSharedLibrary) {
+        return Status::InvalidArgument("[AOT] INPUT msg=unsupported output kind");
     }
 
     auto loaded_or = LoadInputModule(options);
@@ -2225,17 +2689,61 @@ StatusOr<AotCompileResult> AotCompiler::Compile(const AotCompileOptions& options
         return AotInvalid("VERIFY", verify.status.message(), loaded.module_name);
     }
 
-    const auto entry_idx = loaded.module.entry_function();
-    if (entry_idx >= loaded.module.functions().size()) {
-        return AotInvalid("ENTRY", "entry function index out of range", loaded.module_name);
+    const auto exported_functions = CollectExportedFunctions(loaded.module);
+    static const std::unordered_set<std::string> kReservedExportNames = {
+        "printf",
+        "strlen",
+        "malloc",
+        "memcpy",
+        "abort",
+        "tievm_aot_is_truthy",
+    };
+    for (const auto& exported : exported_functions) {
+        const auto& exported_fn = loaded.module.functions()[exported.function_index];
+        if (exported_fn.upvalue_count() != 0) {
+            return AotInvalid(
+                "EXPORT_CLOSURE_UNSUPPORTED",
+                "exported function cannot capture upvalues",
+                loaded.module_name,
+                exported.name);
+        }
+        if (kReservedExportNames.contains(exported.name) ||
+            exported.name.rfind("tievm_fn_", 0) == 0) {
+            return AotInvalid(
+                "EXPORT_NAME_CONFLICT",
+                "exported function name conflicts with reserved AOT symbol",
+                loaded.module_name,
+                exported.name);
+        }
     }
-    const auto& entry_fn = loaded.module.functions()[entry_idx];
-    if (entry_fn.param_count() != 0 || entry_fn.is_vararg()) {
+
+    if (options.output_kind == AotOutputKind::kExecutable) {
+        const auto entry_idx = loaded.module.entry_function();
+        if (entry_idx >= loaded.module.functions().size()) {
+            return AotInvalid("ENTRY", "entry function index out of range", loaded.module_name);
+        }
+        const auto& entry_fn = loaded.module.functions()[entry_idx];
+        if (entry_fn.param_count() != 0 || entry_fn.is_vararg()) {
+            return AotInvalid(
+                "ENTRY_SIGNATURE",
+                "entry function must be non-vararg with zero parameters for executable AOT",
+                loaded.module_name,
+                entry_fn.name());
+        }
+        for (const auto& exported : exported_functions) {
+            if (exported.name == "main") {
+                return AotInvalid(
+                    "EXPORT_NAME_CONFLICT",
+                    "exported function name 'main' conflicts with executable entry symbol",
+                    loaded.module_name,
+                    exported.name);
+            }
+        }
+    } else if (exported_functions.empty()) {
         return AotInvalid(
-            "ENTRY_SIGNATURE",
-            "entry function must be non-vararg with zero parameters for tiebc aot",
-            loaded.module_name,
-            entry_fn.name());
+            "EXPORT_REQUIRED",
+            "shared library output requires at least one exported function",
+            loaded.module_name);
     }
 
     auto ffi_status = ResolveFfiLibraries(&loaded);
@@ -2243,7 +2751,7 @@ StatusOr<AotCompileResult> AotCompiler::Compile(const AotCompileOptions& options
         return ffi_status;
     }
 
-    LlvmIrBuilder builder(loaded);
+    LlvmIrBuilder builder(loaded, options.output_kind, exported_functions);
     auto ir_or = builder.Build();
     if (!ir_or.ok()) {
         return ir_or.status();
@@ -2270,10 +2778,28 @@ StatusOr<AotCompileResult> AotCompiler::Compile(const AotCompileOptions& options
         return obj_status;
     }
 
-    auto link_status =
-        LinkExecutable(options, obj_path, options.output_executable, loaded.linked_libraries);
+    auto link_status = LinkArtifact(
+        options, obj_path, options.output_executable, loaded.linked_libraries);
     if (!link_status.ok()) {
         return link_status;
+    }
+
+    std::optional<std::filesystem::path> header_path;
+    if (options.emit_header.has_value() || !exported_functions.empty()) {
+        auto header_path_or = ResolveHeaderPath(options);
+        if (!header_path_or.ok()) {
+            return header_path_or.status();
+        }
+        header_path = header_path_or.value();
+        auto header_text_or = BuildExportHeader(loaded.module_name, exported_functions);
+        if (!header_text_or.ok()) {
+            return header_text_or.status();
+        }
+        auto header_status = WriteTextFile(
+            *header_path, header_text_or.value());
+        if (!header_status.ok()) {
+            return header_status;
+        }
     }
 
     if (!options.emit_ir.has_value()) {
@@ -2287,15 +2813,23 @@ StatusOr<AotCompileResult> AotCompiler::Compile(const AotCompileOptions& options
 
     AotCompileResult result;
     result.output_executable = options.output_executable;
+    result.output_kind = options.output_kind;
     if (options.emit_ir.has_value()) {
         result.emitted_ir = ir_path;
     }
     if (options.emit_obj.has_value()) {
         result.emitted_obj = obj_path;
     }
+    if (header_path.has_value()) {
+        result.emitted_header = *header_path;
+    }
     result.compiled_module = loaded.module_name;
     result.linked_libraries = loaded.linked_libraries;
     result.target_triple = options.target_triple.value_or("host");
+    result.exported_functions.reserve(exported_functions.size());
+    for (const auto& exported : exported_functions) {
+        result.exported_functions.push_back(exported.name);
+    }
     return result;
 }
 
