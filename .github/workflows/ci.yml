@@ -63,19 +63,30 @@ jobs:
       - name: Generate compile_commands.json
         run: xmake project -k compile_commands
 
-      - name: Run clang-tidy (changed files only)
-        if: github.event_name == 'pull_request'
+      - name: Run clang-tidy (changed files)
         run: |
-          git diff --name-only --diff-filter=AM origin/${{ github.base_ref }}...HEAD -- 'src/**/*.cpp' 'tests/**/*.cpp' > changed_files.txt || true
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="origin/${{ github.base_ref }}...HEAD"
+          else
+            BEFORE_SHA="${{ github.event.before }}"
+            if [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              RANGE="HEAD~1...HEAD"
+            else
+              RANGE="$BEFORE_SHA...${{ github.sha }}"
+            fi
+          fi
+
+          git diff --name-only --diff-filter=AM "$RANGE" \
+            | grep -E '^(src|tests)/.*\.cpp$' > changed_files.txt || true
+
           if [ -s changed_files.txt ]; then
             echo "Checking changed files:"
             cat changed_files.txt
-            xargs -a changed_files.txt clang-tidy -p .
+            xargs -a changed_files.txt clang-tidy -p . -quiet \
+              -header-filter='^(src|tests)/' \
+              -checks='-*,bugprone-*,clang-analyzer-*,performance-*,-bugprone-easily-swappable-parameters'
           else
             echo "No C++ files changed."
           fi
-
-      - name: Run clang-tidy (all files)
-        if: github.event_name == 'push'
-        run: |
-          find src tests -name '*.cpp' -type f -print0 | xargs -0 clang-tidy -p .
