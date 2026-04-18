@@ -1,9 +1,18 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
+
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#include <process.h>
+#include <sys/stat.h>
+#endif
 
 #include "test_helpers.hpp"
 
@@ -42,6 +51,62 @@ std::string QuoteShellArg(const std::string& raw) {
     }
     escaped += '\'';
     return escaped;
+#endif
+}
+
+int RunExecutableAndCapture(
+    const std::filesystem::path& executable, const std::filesystem::path& out_file) {
+#if defined(_WIN32)
+    const int out_fd = _open(
+        out_file.string().c_str(), _O_CREAT | _O_TRUNC | _O_WRONLY | _O_BINARY, _S_IREAD | _S_IWRITE);
+    if (out_fd < 0) {
+        return 1;
+    }
+
+    const int saved_stdout_fd = _dup(_fileno(stdout));
+    const int saved_stderr_fd = _dup(_fileno(stderr));
+    if (saved_stdout_fd < 0 || saved_stderr_fd < 0) {
+        if (saved_stdout_fd >= 0) {
+            _close(saved_stdout_fd);
+        }
+        if (saved_stderr_fd >= 0) {
+            _close(saved_stderr_fd);
+        }
+        _close(out_fd);
+        return 1;
+    }
+
+    if (_dup2(out_fd, _fileno(stdout)) < 0 || _dup2(out_fd, _fileno(stderr)) < 0) {
+        _close(out_fd);
+        _dup2(saved_stdout_fd, _fileno(stdout));
+        _dup2(saved_stderr_fd, _fileno(stderr));
+        _close(saved_stdout_fd);
+        _close(saved_stderr_fd);
+        return 1;
+    }
+    _close(out_fd);
+
+    std::string exe = executable.string();
+    std::vector<char> exe_buf(exe.begin(), exe.end());
+    exe_buf.push_back('\0');
+    char* argv[] = {exe_buf.data(), nullptr};
+    const intptr_t rc = _spawnv(_P_WAIT, exe_buf.data(), argv);
+
+    std::fflush(stdout);
+    std::fflush(stderr);
+    _dup2(saved_stdout_fd, _fileno(stdout));
+    _dup2(saved_stderr_fd, _fileno(stderr));
+    _close(saved_stdout_fd);
+    _close(saved_stderr_fd);
+
+    if (rc == -1) {
+        return 1;
+    }
+    return static_cast<int>(rc);
+#else
+    const std::string run_cmd =
+        QuoteShellArg(executable.string()) + " > " + QuoteShellArg(out_file.string()) + " 2>&1";
+    return std::system(run_cmd.c_str());
 #endif
 }
 
@@ -104,9 +169,7 @@ TEST(AotTest, CompileTbcToExecutableAndRun) {
     EXPECT_TRUE(std::filesystem::exists(exe));
 
     const auto out_file = test::TempPath("aot_sum_stdout.txt");
-    const std::string run_cmd =
-        QuoteShellArg(exe.string()) + " > " + QuoteShellArg(out_file.string()) + " 2>&1";
-    const int rc = std::system(run_cmd.c_str());
+    const int rc = RunExecutableAndCapture(exe, out_file);
     ASSERT_EQ(rc, 0);
 
     const auto text = ReadTextFile(out_file);
@@ -153,9 +216,7 @@ TEST(AotTest, CompileTlbsDirectoryToExecutableAndRun) {
     EXPECT_TRUE(std::filesystem::exists(exe));
 
     const auto out_file = test::TempPath("aot_bundle_stdout.txt");
-    const std::string run_cmd =
-        QuoteShellArg(exe.string()) + " > " + QuoteShellArg(out_file.string()) + " 2>&1";
-    const int rc = std::system(run_cmd.c_str());
+    const int rc = RunExecutableAndCapture(exe, out_file);
     ASSERT_EQ(rc, 0);
 
     const auto text = ReadTextFile(out_file);
@@ -209,9 +270,7 @@ TEST(AotTest, CompileTlbUsesModuleOverride) {
     EXPECT_TRUE(std::filesystem::exists(exe));
 
     const auto out_file = test::TempPath("aot_multi_stdout.txt");
-    const std::string run_cmd =
-        QuoteShellArg(exe.string()) + " > " + QuoteShellArg(out_file.string()) + " 2>&1";
-    const int rc = std::system(run_cmd.c_str());
+    const int rc = RunExecutableAndCapture(exe, out_file);
     ASSERT_EQ(rc, 0);
 
     const auto text = ReadTextFile(out_file);
@@ -259,9 +318,7 @@ TEST(AotTest, CompileVarArgOpcodeAndRun) {
     EXPECT_TRUE(std::filesystem::exists(exe));
 
     const auto out_file = test::TempPath("aot_vararg_stdout.txt");
-    const std::string run_cmd =
-        QuoteShellArg(exe.string()) + " > " + QuoteShellArg(out_file.string()) + " 2>&1";
-    const int rc = std::system(run_cmd.c_str());
+    const int rc = RunExecutableAndCapture(exe, out_file);
     ASSERT_EQ(rc, 0);
 
     const auto text = ReadTextFile(out_file);
@@ -311,9 +368,7 @@ TEST(AotTest, CompileTryCatchFinallyAndThrowOpcode) {
     EXPECT_TRUE(std::filesystem::exists(exe));
 
     const auto out_file = test::TempPath("aot_try_throw_stdout.txt");
-    const std::string run_cmd =
-        QuoteShellArg(exe.string()) + " > " + QuoteShellArg(out_file.string()) + " 2>&1";
-    const int rc = std::system(run_cmd.c_str());
+    const int rc = RunExecutableAndCapture(exe, out_file);
     ASSERT_EQ(rc, 0);
 
     const auto text = ReadTextFile(out_file);
@@ -507,9 +562,7 @@ TEST(AotTest, CompileOopInvokeWithC3DispatchAndRun) {
     EXPECT_TRUE(std::filesystem::exists(exe));
 
     const auto out_file = test::TempPath("aot_oop_c3_stdout.txt");
-    const std::string run_cmd =
-        QuoteShellArg(exe.string()) + " > " + QuoteShellArg(out_file.string()) + " 2>&1";
-    const int rc = std::system(run_cmd.c_str());
+    const int rc = RunExecutableAndCapture(exe, out_file);
     ASSERT_EQ(rc, 0);
 
     const auto text = ReadTextFile(out_file);
@@ -560,9 +613,7 @@ TEST(AotTest, CompileOopInvokePrivateMethodAbortsAtRuntime) {
     EXPECT_TRUE(std::filesystem::exists(exe));
 
     const auto out_file = test::TempPath("aot_oop_private_stdout.txt");
-    const std::string run_cmd =
-        QuoteShellArg(exe.string()) + " > " + QuoteShellArg(out_file.string()) + " 2>&1";
-    const int rc = std::system(run_cmd.c_str());
+    const int rc = RunExecutableAndCapture(exe, out_file);
     EXPECT_NE(rc, 0);
 }
 
