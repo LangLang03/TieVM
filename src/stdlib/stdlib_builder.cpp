@@ -159,6 +159,8 @@ std::vector<ExportSpec> IoExports() {
          "tie_std_io_print",
          {{AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
          {AbiValueKind::kVoid, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
+        {"tie.std.io.read_i64", "tie_std_io_read_i64", {},
+         {AbiValueKind::kI64, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},
         {"tie.std.io.read_text",
          "tie_std_io_read_text",
          {{AbiValueKind::kUtf8, OwnershipQualifier::kBorrowed, FfiPassingMode::kValue, 0, 0}},

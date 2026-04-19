@@ -85,9 +85,22 @@ target("tiebc")
         "src/cli/tiebc_main.cpp",
         "src/cli/tiebc_disasm.cpp",
         "src/cli/tiebc_emit.cpp",
+        "src/cli/tiebc_opt.cpp",
         "src/cli/tiebc_aot.cpp",
         "src/cli/tiebc_struct.cpp",
         "src/cli/tiebc_dispatch.cpp"
+    )
+    add_deps("tievm_core", "tievm_std_native")
+
+target("tievm_opt")
+    set_kind("binary")
+    add_includedirs("include")
+    if has_config("cli_help") then
+        add_defines("TIEVM_ENABLE_HELP=1")
+    end
+    add_files(
+        "src/cli/tievm_opt_main.cpp",
+        "src/cli/tiebc_opt.cpp"
     )
     add_deps("tievm_core", "tievm_std_native")
 
@@ -98,7 +111,8 @@ target("tievm_tests")
         "tests/test_main.cpp",
         "tests/unit/*.cpp",
         "tests/smoke/*.cpp",
-        "src/cli/tiebc_emit.cpp"
+        "src/cli/tiebc_emit.cpp",
+        "src/cli/tiebc_opt.cpp"
     )
     add_packages("gtest")
     add_deps("tievm_core", "tievm_std_native")

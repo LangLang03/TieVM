@@ -55,6 +55,11 @@ tievm run <file.tlbs> [module_name] [--validate] [--trusted] [--cache-dir <dir>]
 - `--cache-dir` 指定 `.tlbs` 解包缓存目录（默认使用用户缓存目录）。
 - 执行 `.tbc` 时会尝试自动加载同目录 `stdlib.tlbs`。
 
+### tievm_opt
+```text
+tievm_opt <input.{tbc|tlb|tlbs}> -o <output> [--module <name>] [--opt <O1|O2|O3>] [--enable-pass <pass>]... [--disable-pass <pass>]... [--inline-max-inst <n>] [--trusted]
+```
+
 ### tiebc
 ```text
 tiebc check <file.tbc>
@@ -66,7 +71,8 @@ tiebc tlbs-unpack <input.tlbs> <output_dir.tlbs>
 tiebc tlb-struct
 tiebc tlbs-struct
 tiebc tbc-struct
-tiebc aot <input.{tbc|tlb|tlbs}> [module] -o <output> [--shared] [--target <triple>] [--cc <clang>] [--sysroot <path>] [--opt <O0|O1|O2|O3>] [--ldflag <flag>]... [--cflag <flag>]... [--emit-ir <file.ll>] [--emit-obj <file.o>] [--emit-header <file.h>]
+tiebc opt <input.{tbc|tlb|tlbs}> -o <output> [--module <name>] [--opt <O1|O2|O3>] [--enable-pass <pass>]... [--disable-pass <pass>]... [--inline-max-inst <n>] [--trusted]
+tiebc aot <input.{tbc|tlb|tlbs}> [module] -o <output> [--shared] [--target <triple>] [--cc <clang>] [--sysroot <path>] [--opt <O0|O1|O2|O3>] [--bc-opt <O1|O2|O3>] [--bc-enable-pass <pass>]... [--bc-disable-pass <pass>]... [--bc-inline-max-inst <n>] [--ldflag <flag>]... [--cflag <flag>]... [--emit-ir <file.ll>] [--emit-obj <file.o>] [--emit-header <file.h>]
 tiebc build-stdlib <output.tlb>
 tiebc build-stdlib-tlbs <output.tlbs>
 tiebc emit-hello <output.tbc>
@@ -78,6 +84,7 @@ tiebc emit-oop-error <output.tbc>
 `tiebc aot` 说明：
 - 严格 AOT：无解释器回退，无法 lowering 的 opcode 会在编译阶段失败并给出 `[AOT]` 定位信息。
 - FFI 链接使用模块内库路径（`.tbc` 相对输入目录、`.tlb` 相对包目录、`.tlbs` 相对 bundle 根目录）。
+- 可通过 `--bc-opt/--bc-enable-pass/--bc-disable-pass` 在 AOT 前执行字节码优化。
 - `--shared` 导出的 `.h` 会根据函数 `param_types/return_type` 生成强类型函数签名（例如 `int64_t sum_export(int64_t, bool)`），可直接按普通 C 函数传参与取返回值。
 
 ## 字节码模型

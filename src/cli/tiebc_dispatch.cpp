@@ -41,13 +41,15 @@ int Usage() {
     std::cerr << "  tiebc tlb-struct\n";
     std::cerr << "  tiebc tlbs-struct\n";
     std::cerr << "  tiebc tbc-struct\n";
-    std::cerr << "  tiebc aot <input.{tbc|tlb|tlbs}> [module] -o <output> [--shared] [--target <triple>] [--cc <clang>] [--sysroot <path>] [--opt <O0|O1|O2|O3>] [--ldflag <flag>]... [--cflag <flag>]... [--emit-ir <file.ll>] [--emit-obj <file.o>] [--emit-header <file.h>]\n";
+    std::cerr << "  tiebc opt <input.{tbc|tlb|tlbs}> -o <output> [--module <name>] [--opt <O1|O2|O3>] [--enable-pass <pass>]... [--disable-pass <pass>]... [--inline-max-inst <n>] [--trusted]\n";
+    std::cerr << "  tiebc aot <input.{tbc|tlb|tlbs}> [module] -o <output> [--shared] [--target <triple>] [--cc <clang>] [--sysroot <path>] [--opt <O0|O1|O2|O3>] [--bc-opt <O1|O2|O3>] [--bc-enable-pass <pass>]... [--bc-disable-pass <pass>]... [--bc-inline-max-inst <n>] [--ldflag <flag>]... [--cflag <flag>]... [--emit-ir <file.ll>] [--emit-obj <file.o>] [--emit-header <file.h>]\n";
     std::cerr << "  tiebc build-stdlib <output.tlb>\n";
     std::cerr << "  tiebc build-stdlib-tlbs <output.tlbs>\n";
     std::cerr << "  tiebc emit-hello <output.tbc>\n";
     std::cerr << "  tiebc emit-opset <output.tbc>\n";
     std::cerr << "  tiebc emit-closure-upvalue <output.tbc>\n";
     std::cerr << "  tiebc emit-fib <output.tbc> [n]\n";
+    std::cerr << "  tiebc emit-fib-dyn <output.tbc>\n";
     std::cerr << "  tiebc emit-error-handling <output.tbc>\n";
     std::cerr << "  tiebc emit-oop-ok <output.tbc>\n";
     std::cerr << "  tiebc emit-oop-error <output.tbc>\n";
@@ -71,6 +73,9 @@ int RunTiebc(int argc, char** argv) {
     }
     if (cmd == "aot") {
         return AotCompileCmd(argc, argv);
+    }
+    if (cmd == "opt") {
+        return OptCmd(argc, argv);
     }
     if (argc < 3) {
         return Usage();
@@ -133,6 +138,9 @@ int RunTiebc(int argc, char** argv) {
             }
         }
         return EmitFib(path, n);
+    }
+    if (cmd == "emit-fib-dyn") {
+        return EmitFibDynamic(path);
     }
     if (cmd == "emit-error-handling") {
         return EmitErrorHandling(path);

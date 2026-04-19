@@ -218,6 +218,7 @@ class Module {
     [[nodiscard]] const std::vector<DebugLineEntry>& debug_lines() const {
         return debug_lines_;
     }
+    [[nodiscard]] std::vector<DebugLineEntry>& debug_lines() { return debug_lines_; }
     [[nodiscard]] const std::vector<std::string>& ffi_library_paths() const {
         return ffi_library_paths_;
     }

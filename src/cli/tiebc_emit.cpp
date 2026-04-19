@@ -208,6 +208,88 @@ int EmitFib(const std::filesystem::path& path, int64_t n) {
     return 0;
 }
 
+int EmitFibDynamic(const std::filesystem::path& path) {
+    Module module("demo.fib.dynamic");
+    module.version() = SemanticVersion{0, 1, 0};
+
+    const auto c_zero = module.AddConstant(Constant::Int64(0));
+    const auto c_one = module.AddConstant(Constant::Int64(1));
+    const auto read_i64_symbol = module.AddConstant(Constant::Utf8("tie.std.io.read_i64"));
+    const auto abs_symbol = module.AddConstant(Constant::Utf8("tie.std.math.abs"));
+    const auto lib_index = module.AddFfiLibraryPath(
+        (std::filesystem::current_path() / NativeStdlibFilename()).string());
+
+    FunctionSignature read_i64_sig;
+    read_i64_sig.name = "tie.std.io.read_i64";
+    read_i64_sig.convention = CallingConvention::kSystem;
+    read_i64_sig.return_type = {AbiValueKind::kI64, OwnershipQualifier::kBorrowed};
+    const auto read_i64_sig_index = module.AddFfiSignature(std::move(read_i64_sig));
+    const auto read_i64_bind_index = module.AddFfiBinding(FfiSymbolBinding{
+        "tie.std.io.read_i64",
+        "tie_std_io_read_i64",
+        lib_index,
+        read_i64_sig_index,
+    });
+
+    FunctionSignature abs_sig;
+    abs_sig.name = "tie.std.math.abs";
+    abs_sig.convention = CallingConvention::kSystem;
+    abs_sig.return_type = {AbiValueKind::kI64, OwnershipQualifier::kBorrowed};
+    abs_sig.params = {{AbiValueKind::kI64, OwnershipQualifier::kBorrowed}};
+    const auto abs_sig_index = module.AddFfiSignature(std::move(abs_sig));
+    const auto abs_bind_index = module.AddFfiBinding(FfiSymbolBinding{
+        "tie.std.math.abs",
+        "tie_std_math_abs",
+        lib_index,
+        abs_sig_index,
+    });
+
+    auto& read_i64_fn = module.AddFunction("read_i64", 4, 0);
+    read_i64_fn.ffi_binding().enabled = true;
+    read_i64_fn.ffi_binding().convention = CallingConvention::kSystem;
+    read_i64_fn.ffi_binding().signature_index = read_i64_sig_index;
+    read_i64_fn.ffi_binding().binding_index = read_i64_bind_index;
+    auto& read_i64_bb = read_i64_fn.AddBlock("entry");
+    InstructionBuilder(read_i64_bb).FfiCall(0, read_i64_symbol, 0).Ret(0);
+
+    auto& abs_fn = module.AddFunction("abs_i64", 4, 1);
+    abs_fn.ffi_binding().enabled = true;
+    abs_fn.ffi_binding().convention = CallingConvention::kSystem;
+    abs_fn.ffi_binding().signature_index = abs_sig_index;
+    abs_fn.ffi_binding().binding_index = abs_bind_index;
+    auto& abs_bb = abs_fn.AddBlock("entry");
+    InstructionBuilder(abs_bb).Mov(1, 0).FfiCall(0, abs_symbol, 1).Ret(0);
+
+    auto& entry = module.AddFunction("entry", 10, 0);
+    auto& bb = entry.AddBlock("entry");
+    InstructionBuilder(bb)
+        .Call(3, 0, 0)         // r3 <- read_i64()
+        .Mov(4, 3)             // arg for abs in call window
+        .Call(3, 1, 1)         // r3 <- abs(r3)
+        .LoadK(1, c_zero)      // a = 0
+        .LoadK(2, c_one)       // b = 1
+        .JmpIfZero(3, 10)      // n == 0 => return a
+        .LoadK(4, c_one)       // const 1
+        .CmpEq(5, 3, 4)        // n == 1 ?
+        .JmpIf(5, 6)           // yes => return b
+        .SubImm(3, 3, 1)       // counter = n - 1
+        .Add(4, 1, 2)          // t = a + b
+        .Mov(1, 2)             // a = b
+        .Mov(2, 4)             // b = t
+        .DecJnz(3, -3)         // repeat until counter == 0
+        .Ret(2)                // fib(n)
+        .Ret(1);               // fib(0)
+    module.set_entry_function(2);
+
+    auto status = Serializer::SerializeToFile(module, path, true);
+    if (!status.ok()) {
+        std::cerr << "emit fib dynamic failed: " << status.message() << "\n";
+        return 2;
+    }
+    std::cout << "wrote " << path.string() << "\n";
+    return 0;
+}
+
 int EmitErrorHandling(const std::filesystem::path& path) {
     Module module("demo.error_handling");
     module.version() = SemanticVersion{0, 1, 0};

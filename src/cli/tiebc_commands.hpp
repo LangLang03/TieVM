@@ -6,8 +6,10 @@
 namespace tie::vm::cli {
 
 int RunTiebc(int argc, char** argv);
+int RunTievmOpt(int argc, char** argv);
 int Usage();
 int AotCompileCmd(int argc, char** argv);
+int OptCmd(int argc, char** argv);
 int Check(const std::filesystem::path& path);
 int DisasmTbc(const std::filesystem::path& path);
 int DisasmTlb(const std::filesystem::path& path);
@@ -15,6 +17,7 @@ int EmitHello(const std::filesystem::path& path);
 int EmitOpset(const std::filesystem::path& path);
 int EmitClosureUpvalue(const std::filesystem::path& path);
 int EmitFib(const std::filesystem::path& path, int64_t n);
+int EmitFibDynamic(const std::filesystem::path& path);
 int EmitErrorHandling(const std::filesystem::path& path);
 int EmitOopOk(const std::filesystem::path& path);
 int EmitOopError(const std::filesystem::path& path);

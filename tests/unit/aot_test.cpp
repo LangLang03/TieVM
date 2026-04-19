@@ -176,6 +176,51 @@ TEST(AotTest, CompileTbcToExecutableAndRun) {
     EXPECT_NE(text.find("15"), std::string::npos);
 }
 
+TEST(AotTest, CompileWithBytecodeOptimizationEnabled) {
+    if (!HasClang()) {
+        GTEST_SKIP() << "clang not found";
+    }
+
+    Module module("aot.bcopt");
+    const auto c41 = module.AddConstant(Constant::Int64(41));
+    auto& plus1 = module.AddFunction("plus1", 2, 1);
+    auto& plus1_bb = plus1.AddBlock("entry");
+    InstructionBuilder(plus1_bb).AddImm(0, 0, 1).Ret(0);
+
+    auto& entry = module.AddFunction("entry", 4, 0);
+    auto& entry_bb = entry.AddBlock("entry");
+    InstructionBuilder(entry_bb).LoadK(1, c41).Call(0, 0, 1).Ret(0);
+    module.set_entry_function(1);
+
+    const auto input = test::TempPath("aot_bc_opt.tbc");
+    ASSERT_TRUE(Serializer::SerializeToFile(module, input).ok());
+
+#if defined(_WIN32)
+    const auto exe = test::TempPath("aot_bc_opt.exe");
+#else
+    const auto exe = test::TempPath("aot_bc_opt.out");
+#endif
+
+    AotCompileOptions options;
+    options.input_path = input;
+    options.output_executable = exe;
+    options.bytecode_opt_level = BytecodeOptLevel::kO3;
+    options.bytecode_inline_max_inst = 8;
+
+    AotCompiler compiler;
+    auto result_or = compiler.Compile(options);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    ASSERT_TRUE(result_or.value().bytecode_opt_stats.has_value());
+    EXPECT_GT(result_or.value().bytecode_opt_stats->rewritten_instruction_count, 0u);
+
+    const auto out_file = test::TempPath("aot_bc_opt_stdout.txt");
+    const int rc = RunExecutableAndCapture(exe, out_file);
+    ASSERT_EQ(rc, 0);
+
+    const auto text = ReadTextFile(out_file);
+    EXPECT_NE(text.find("42"), std::string::npos);
+}
+
 TEST(AotTest, CompileTlbsDirectoryToExecutableAndRun) {
     if (!HasClang()) {
         GTEST_SKIP() << "clang not found";

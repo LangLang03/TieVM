@@ -2,12 +2,13 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <optional>
 
 #include "tie/vm/bytecode/module.hpp"
+#include "tie/vm/bytecode/optimizer.hpp"
 #include "tie/vm/common/status.hpp"
 
 namespace tie::vm {
@@ -32,6 +33,10 @@ struct AotCompileOptions {
     std::optional<std::filesystem::path> emit_obj;
     std::optional<std::filesystem::path> emit_header;
     bool verify = true;
+    std::optional<BytecodeOptLevel> bytecode_opt_level;
+    std::vector<BytecodeOptPass> bytecode_enable_passes;
+    std::vector<BytecodeOptPass> bytecode_disable_passes;
+    uint32_t bytecode_inline_max_inst = 8;
 };
 
 struct AotCompileResult {
@@ -44,6 +49,7 @@ struct AotCompileResult {
     std::string compiled_module;
     std::vector<std::filesystem::path> linked_libraries;
     std::vector<std::string> exported_functions;
+    std::optional<BytecodeOptStats> bytecode_opt_stats;
 };
 
 class AotCompiler {

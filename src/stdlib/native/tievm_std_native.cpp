@@ -1,4 +1,5 @@
 #include <chrono>
+#include <charconv>
 #include <cctype>
 #include <cstring>
 #include <cstdint>
@@ -188,6 +189,35 @@ TIEVM_STD_EXPORT void tie_std_io_print(const char* text) {
         return;
     }
     std::cout << text << "\n";
+}
+
+TIEVM_STD_EXPORT int64_t tie_std_io_read_i64() {
+    std::string line;
+    if (!std::getline(std::cin, line)) {
+        return 0;
+    }
+
+    size_t begin = 0;
+    while (begin < line.size() && std::isspace(static_cast<unsigned char>(line[begin])) != 0) {
+        ++begin;
+    }
+    if (begin == line.size()) {
+        return 0;
+    }
+
+    size_t end = line.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(line[end - 1])) != 0) {
+        --end;
+    }
+
+    int64_t value = 0;
+    const char* first = line.data() + begin;
+    const char* last = line.data() + end;
+    const auto [ptr, ec] = std::from_chars(first, last, value);
+    if (ec != std::errc{} || ptr != last) {
+        return 0;
+    }
+    return value;
 }
 
 TIEVM_STD_EXPORT const char* tie_std_io_read_text(const char* path) {

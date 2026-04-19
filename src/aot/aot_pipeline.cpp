@@ -2712,6 +2712,25 @@ StatusOr<AotCompileResult> AotCompiler::Compile(const AotCompileOptions& options
         }
     } temp_cleanup{loaded.temp_materialized_root};
 
+    std::optional<BytecodeOptStats> bytecode_opt_stats;
+    if (options.bytecode_opt_level.has_value()) {
+        if (*options.bytecode_opt_level == BytecodeOptLevel::kO0) {
+            return Status::InvalidArgument(
+                "[AOT] INPUT msg=bytecode opt level must be one of O1/O2/O3 when enabled");
+        }
+        BytecodeOptOptions bc_options;
+        bc_options.level = *options.bytecode_opt_level;
+        bc_options.enable_passes = options.bytecode_enable_passes;
+        bc_options.disable_passes = options.bytecode_disable_passes;
+        bc_options.inline_max_inst = options.bytecode_inline_max_inst;
+        bc_options.verify_input = options.verify;
+        auto opt_stats_or = OptimizeBytecodeModuleInPlace(&loaded.module, bc_options);
+        if (!opt_stats_or.ok()) {
+            return AotInvalid("BC_OPT", opt_stats_or.status().message(), loaded.module_name);
+        }
+        bytecode_opt_stats = std::move(opt_stats_or.value());
+    }
+
     auto verify = Verifier::Verify(loaded.module);
     if (!verify.status.ok()) {
         return AotInvalid("VERIFY", verify.status.message(), loaded.module_name);
@@ -2857,6 +2876,9 @@ StatusOr<AotCompileResult> AotCompiler::Compile(const AotCompileOptions& options
     result.exported_functions.reserve(exported_functions.size());
     for (const auto& exported : exported_functions) {
         result.exported_functions.push_back(exported.name);
+    }
+    if (bytecode_opt_stats.has_value()) {
+        result.bytecode_opt_stats = std::move(bytecode_opt_stats);
     }
     return result;
 }

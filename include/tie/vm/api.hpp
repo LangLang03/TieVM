@@ -3,6 +3,7 @@
 #include "tie/vm/aot/aot_pipeline.hpp"
 #include "tie/vm/bytecode/builder.hpp"
 #include "tie/vm/bytecode/module.hpp"
+#include "tie/vm/bytecode/optimizer.hpp"
 #include "tie/vm/bytecode/serializer.hpp"
 #include "tie/vm/bytecode/verifier.hpp"
 #include "tie/vm/common/status.hpp"

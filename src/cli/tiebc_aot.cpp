@@ -1,5 +1,6 @@
 #include "tiebc_commands.hpp"
 
+#include <charconv>
 #include <iostream>
 #include <string>
 
@@ -16,7 +17,10 @@ int PrintAotUsage() {
         << "  tiebc aot <input.{tbc|tlb|tlbs}> [module] -o <output> "
            "[--shared] "
            "[--target <triple>] [--cc <clang>] [--sysroot <path>] "
-           "[--opt <O0|O1|O2|O3>] [--ldflag <flag>]... [--cflag <flag>]... "
+           "[--opt <O0|O1|O2|O3>] "
+           "[--bc-opt <O1|O2|O3>] [--bc-enable-pass <pass>]... "
+           "[--bc-disable-pass <pass>]... [--bc-inline-max-inst <n>] "
+           "[--ldflag <flag>]... [--cflag <flag>]... "
            "[--emit-ir <file.ll>] [--emit-obj <file.o>] [--emit-header <file.h>]\n";
 #endif
     return 1;
@@ -103,6 +107,61 @@ int AotCompileCmd(int argc, char** argv) {
             options.emit_header = std::filesystem::path(argv[++i]);
             continue;
         }
+        if (arg == "--bc-opt") {
+            if (i + 1 >= argc) {
+                return PrintAotUsage();
+            }
+            auto level_or = ParseBytecodeOptLevel(argv[++i]);
+            if (!level_or.ok()) {
+                std::cerr << "aot: " << level_or.status().message() << "\n";
+                return PrintAotUsage();
+            }
+            if (level_or.value() == BytecodeOptLevel::kO0) {
+                std::cerr << "aot: --bc-opt only supports O1/O2/O3\n";
+                return PrintAotUsage();
+            }
+            options.bytecode_opt_level = level_or.value();
+            continue;
+        }
+        if (arg == "--bc-enable-pass") {
+            if (i + 1 >= argc) {
+                return PrintAotUsage();
+            }
+            auto pass_or = ParseBytecodeOptPass(argv[++i]);
+            if (!pass_or.ok()) {
+                std::cerr << "aot: " << pass_or.status().message() << "\n";
+                return PrintAotUsage();
+            }
+            options.bytecode_enable_passes.push_back(pass_or.value());
+            continue;
+        }
+        if (arg == "--bc-disable-pass") {
+            if (i + 1 >= argc) {
+                return PrintAotUsage();
+            }
+            auto pass_or = ParseBytecodeOptPass(argv[++i]);
+            if (!pass_or.ok()) {
+                std::cerr << "aot: " << pass_or.status().message() << "\n";
+                return PrintAotUsage();
+            }
+            options.bytecode_disable_passes.push_back(pass_or.value());
+            continue;
+        }
+        if (arg == "--bc-inline-max-inst") {
+            if (i + 1 >= argc) {
+                return PrintAotUsage();
+            }
+            uint32_t parsed = 0;
+            const std::string value = argv[++i];
+            const auto [ptr, ec] =
+                std::from_chars(value.data(), value.data() + value.size(), parsed);
+            if (ec != std::errc() || ptr != value.data() + value.size() || parsed == 0) {
+                std::cerr << "aot: --bc-inline-max-inst must be a positive integer\n";
+                return PrintAotUsage();
+            }
+            options.bytecode_inline_max_inst = parsed;
+            continue;
+        }
         if (arg == "--ldflag") {
             if (i + 1 >= argc) {
                 return PrintAotUsage();
@@ -159,6 +218,25 @@ int AotCompileCmd(int argc, char** argv) {
             std::cout << result.exported_functions[i];
         }
         std::cout << "\n";
+    }
+    if (result.bytecode_opt_stats.has_value()) {
+        const auto& stats = *result.bytecode_opt_stats;
+        std::cout << "aot bc-opt level=" << BytecodeOptLevelName(*options.bytecode_opt_level)
+                  << " functions=" << stats.module_function_count
+                  << " optimized_functions=" << stats.optimized_function_count
+                  << " rewritten=" << stats.rewritten_instruction_count
+                  << " removed=" << stats.removed_instruction_count
+                  << " inlined=" << stats.inlined_callsite_count << "\n";
+        if (!stats.executed_passes.empty()) {
+            std::cout << "aot bc-opt passes=";
+            for (size_t i = 0; i < stats.executed_passes.size(); ++i) {
+                if (i > 0) {
+                    std::cout << ",";
+                }
+                std::cout << BytecodeOptPassName(stats.executed_passes[i]);
+            }
+            std::cout << "\n";
+        }
     }
     return 0;
 }
