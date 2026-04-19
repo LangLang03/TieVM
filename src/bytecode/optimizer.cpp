@@ -380,6 +380,14 @@ bool IsInlineSafeOpcode(OpCode opcode) {
         case OpCode::kBitNot:
         case OpCode::kBitShl:
         case OpCode::kBitShr:
+        case OpCode::kJmp:
+        case OpCode::kJmpIf:
+        case OpCode::kJmpIfZero:
+        case OpCode::kJmpIfNotZero:
+        case OpCode::kDecJnz:
+        case OpCode::kAddDecJnz:
+        case OpCode::kSubImmJnz:
+        case OpCode::kAddImmJnz:
         case OpCode::kRet:
             return true;
         default:
@@ -387,7 +395,7 @@ bool IsInlineSafeOpcode(OpCode opcode) {
     }
 }
 
-bool WritesRegisterAboveZero(const Instruction& inst) {
+bool InstructionWritesReg(const Instruction& inst, uint32_t reg) {
     switch (inst.opcode) {
         case OpCode::kMov:
         case OpCode::kLoadK:
@@ -417,35 +425,36 @@ bool WritesRegisterAboveZero(const Instruction& inst) {
         case OpCode::kGetUpval:
         case OpCode::kNewObject:
         case OpCode::kInvoke:
-            return inst.a > 0;
+            return inst.a == reg;
         case OpCode::kDecJnz:
-            return inst.a > 0;
+            return inst.a == reg;
         case OpCode::kAddDecJnz:
-            return inst.a > 0 || inst.b > 0;
+            return inst.a == reg || inst.b == reg;
         case OpCode::kVarArg:
             if (inst.c == 0) {
                 return false;
             }
-            return inst.a > 0 || inst.c > 1;
+            if (inst.a == reg) {
+                return true;
+            }
+            return reg >= inst.a && reg < inst.a + inst.c;
         default:
             return false;
     }
 }
 
-uint32_t MapInlineReg(uint32_t reg, const Instruction& call_inst) {
-    if (reg == 0) {
-        return call_inst.a;
-    }
-    return call_inst.a + 1 + reg;
+uint32_t MapInlineReg(uint32_t reg, uint32_t scratch_base) {
+    return scratch_base + reg;
 }
 
-bool RemapInlineInstructionRegs(Instruction* inst, const Instruction& call_inst) {
+bool RemapInlineInstructionRegs(Instruction* inst, uint32_t scratch_base) {
     auto map_reg = [&](uint32_t* field) {
-        *field = MapInlineReg(*field, call_inst);
+        *field = MapInlineReg(*field, scratch_base);
     };
 
     switch (inst->opcode) {
         case OpCode::kNop:
+        case OpCode::kJmp:
             return true;
         case OpCode::kMov:
             map_reg(&inst->a);
@@ -478,7 +487,19 @@ bool RemapInlineInstructionRegs(Instruction* inst, const Instruction& call_inst)
             return true;
         case OpCode::kInc:
         case OpCode::kDec:
+        case OpCode::kRet:
+        case OpCode::kThrow:
+        case OpCode::kJmpIf:
+        case OpCode::kJmpIfZero:
+        case OpCode::kJmpIfNotZero:
+        case OpCode::kDecJnz:
+        case OpCode::kSubImmJnz:
+        case OpCode::kAddImmJnz:
             map_reg(&inst->a);
+            return true;
+        case OpCode::kAddDecJnz:
+            map_reg(&inst->a);
+            map_reg(&inst->b);
             return true;
         default:
             return false;
@@ -503,10 +524,7 @@ bool IsInlineCandidate(
     if (function.is_exported() || function.is_vararg() || function.upvalue_count() != 0) {
         return false;
     }
-    if (function.param_count() == 0) {
-        return false;
-    }
-    if (function.reg_count() != function.param_count()) {
+    if (function.reg_count() == 0) {
         return false;
     }
     if (IsDirectRecursive(module, function_index)) {
@@ -527,14 +545,25 @@ bool IsInlineCandidate(
         if (!IsInlineSafeOpcode(inst.opcode)) {
             return false;
         }
-        if (WritesRegisterAboveZero(inst)) {
-            return false;
-        }
-        if (inst.opcode == OpCode::kRet) {
-            ++ret_count;
-            if (i + 1 != code.size() || inst.a != 0) {
+        if (IsRelativeJumpOpcode(inst.opcode)) {
+            const int64_t target =
+                static_cast<int64_t>(i) + static_cast<int64_t>(RelativeJumpDelta(inst));
+            if (target < 0 || target >= static_cast<int64_t>(code.size())) {
                 return false;
             }
+        }
+        if (inst.opcode == OpCode::kRet) {
+            if (inst.a >= function.reg_count()) {
+                return false;
+            }
+            ++ret_count;
+            if (i + 1 != code.size()) {
+                return false;
+            }
+            continue;
+        }
+        if (IsTerminator(inst.opcode)) {
+            return false;
         }
     }
     if (ret_count != 1) {
@@ -772,6 +801,739 @@ PassRunResult RunLoopFusionPass(Function* function) {
             result.changed = true;
             result.rewritten += 2;
             continue;
+        }
+    }
+
+    if (result.changed) {
+        RebuildFunctionCode(function, code);
+    }
+    return result;
+}
+
+bool KnownValueEquals(const KnownValue& lhs, const KnownValue& rhs) {
+    if (lhs.kind != rhs.kind) {
+        return false;
+    }
+    switch (lhs.kind) {
+        case KnownValue::Kind::kUnknown:
+            return true;
+        case KnownValue::Kind::kInt64:
+            return lhs.int64_value == rhs.int64_value;
+        case KnownValue::Kind::kBool:
+            return lhs.bool_value == rhs.bool_value;
+    }
+    return false;
+}
+
+KnownValue MergeKnownValues(KnownValue lhs, KnownValue rhs) {
+    if (lhs.kind == KnownValue::Kind::kUnknown || rhs.kind == KnownValue::Kind::kUnknown) {
+        return KnownValue::Unknown();
+    }
+    if (lhs.kind != rhs.kind) {
+        return KnownValue::Unknown();
+    }
+    if (KnownValueEquals(lhs, rhs)) {
+        return lhs;
+    }
+    return KnownValue::Unknown();
+}
+
+std::optional<int64_t> FoldIntBinary(OpCode opcode, int64_t lhs, int64_t rhs) {
+    switch (opcode) {
+        case OpCode::kAdd:
+            return lhs + rhs;
+        case OpCode::kSub:
+            return lhs - rhs;
+        case OpCode::kMul:
+            return lhs * rhs;
+        case OpCode::kDiv:
+            if (rhs == 0) {
+                return std::nullopt;
+            }
+            return lhs / rhs;
+        case OpCode::kBitAnd:
+            return lhs & rhs;
+        case OpCode::kBitOr:
+            return lhs | rhs;
+        case OpCode::kBitXor:
+            return lhs ^ rhs;
+        case OpCode::kBitShl:
+            return lhs << (static_cast<uint32_t>(rhs) & 63u);
+        case OpCode::kBitShr:
+            return lhs >> (static_cast<uint32_t>(rhs) & 63u);
+        default:
+            return std::nullopt;
+    }
+}
+
+std::vector<std::vector<size_t>> CollectPredecessors(const std::vector<Instruction>& code) {
+    std::vector<std::vector<size_t>> preds(code.size());
+    auto add_edge = [&](size_t from, int64_t to) {
+        if (to < 0 || to >= static_cast<int64_t>(code.size())) {
+            return;
+        }
+        preds[static_cast<size_t>(to)].push_back(from);
+    };
+
+    for (size_t i = 0; i < code.size(); ++i) {
+        const auto& inst = code[i];
+        switch (inst.opcode) {
+            case OpCode::kJmp:
+                add_edge(i, static_cast<int64_t>(i) + static_cast<int32_t>(inst.a));
+                break;
+            case OpCode::kJmpIf:
+            case OpCode::kJmpIfZero:
+            case OpCode::kJmpIfNotZero:
+            case OpCode::kDecJnz:
+                add_edge(i, static_cast<int64_t>(i) + static_cast<int32_t>(inst.b));
+                add_edge(i, static_cast<int64_t>(i) + 1);
+                break;
+            case OpCode::kAddDecJnz:
+            case OpCode::kSubImmJnz:
+            case OpCode::kAddImmJnz:
+                add_edge(i, static_cast<int64_t>(i) + static_cast<int32_t>(inst.c));
+                add_edge(i, static_cast<int64_t>(i) + 1);
+                break;
+            default:
+                if (!IsTerminator(inst.opcode)) {
+                    add_edge(i, static_cast<int64_t>(i) + 1);
+                }
+                break;
+        }
+    }
+
+    for (auto& p : preds) {
+        std::sort(p.begin(), p.end());
+        p.erase(std::unique(p.begin(), p.end()), p.end());
+    }
+    return preds;
+}
+
+PassRunResult RunLicmHeaderLoadPass(Function* function) {
+    PassRunResult result;
+    auto code = function->FlattenedInstructions();
+    if (code.empty() || ContainsTryInstructions(code)) {
+        return result;
+    }
+
+    const auto preds = CollectPredecessors(code);
+    for (size_t back_pc = 0; back_pc < code.size(); ++back_pc) {
+        const auto& jump_inst = code[back_pc];
+        if (!IsRelativeJumpOpcode(jump_inst.opcode)) {
+            continue;
+        }
+        const int64_t target =
+            static_cast<int64_t>(back_pc) + static_cast<int64_t>(RelativeJumpDelta(jump_inst));
+        if (target <= 0 || target >= static_cast<int64_t>(back_pc)) {
+            continue;
+        }
+        const size_t header = static_cast<size_t>(target);
+        if (header + 1 >= code.size()) {
+            continue;
+        }
+        if (preds[header].size() != 2) {
+            continue;
+        }
+        const bool has_preheader = preds[header][0] == header - 1 || preds[header][1] == header - 1;
+        const bool has_backedge = preds[header][0] == back_pc || preds[header][1] == back_pc;
+        if (!has_preheader || !has_backedge) {
+            continue;
+        }
+
+        const auto& header_inst = code[header];
+        if (header_inst.opcode != OpCode::kLoadK) {
+            continue;
+        }
+        const uint32_t dst = header_inst.a;
+        bool rewritten_in_loop = false;
+        for (size_t i = header + 1; i <= back_pc; ++i) {
+            if (InstructionWritesReg(code[i], dst)) {
+                rewritten_in_loop = true;
+                break;
+            }
+        }
+        if (rewritten_in_loop) {
+            continue;
+        }
+
+        const int64_t new_delta = static_cast<int64_t>(header + 1) - static_cast<int64_t>(back_pc);
+        if (new_delta < static_cast<int64_t>(std::numeric_limits<int32_t>::min()) ||
+            new_delta > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+            continue;
+        }
+        if (new_delta == RelativeJumpDelta(code[back_pc])) {
+            continue;
+        }
+        SetRelativeJumpDelta(&code[back_pc], static_cast<int32_t>(new_delta));
+        result.changed = true;
+        ++result.rewritten;
+    }
+
+    if (result.changed) {
+        RebuildFunctionCode(function, code);
+    }
+    return result;
+}
+
+PassRunResult RunStrengthReductionPass(
+    Function* function, Module* module,
+    std::unordered_map<int64_t, uint32_t>* int64_cache) {
+    PassRunResult result;
+    auto code = function->FlattenedInstructions();
+    if (code.empty()) {
+        return result;
+    }
+    const auto labels = CollectJumpTargets(code);
+
+    std::unordered_map<uint32_t, KnownValue> known;
+    auto write_int64_loadk = [&](Instruction* inst, uint32_t dst, int64_t value) {
+        const uint32_t const_idx = GetOrAddInt64Constant(module, int64_cache, value);
+        *inst = MakeInstruction(OpCode::kLoadK, dst, const_idx, 0);
+    };
+
+    for (size_t i = 0; i < code.size(); ++i) {
+        auto& inst = code[i];
+        if (IsLabelTarget(labels, i)) {
+            known.clear();
+        }
+
+        bool inst_changed = false;
+        switch (inst.opcode) {
+            case OpCode::kLoadK:
+                if (inst.b < module->constants().size() &&
+                    module->constants()[inst.b].type == ConstantType::kInt64) {
+                    SetKnown(
+                        &known,
+                        inst.a,
+                        KnownValue::Int64(module->constants()[inst.b].int64_value));
+                } else {
+                    SetKnown(&known, inst.a, KnownValue::Unknown());
+                }
+                break;
+            case OpCode::kMov:
+                SetKnown(&known, inst.a, GetKnown(known, inst.b));
+                break;
+            case OpCode::kMul: {
+                const auto lhs = KnownInt64(GetKnown(known, inst.b));
+                const auto rhs = KnownInt64(GetKnown(known, inst.c));
+                if (lhs.has_value() || rhs.has_value()) {
+                    const bool lhs_const = lhs.has_value();
+                    const int64_t k = lhs_const ? *lhs : *rhs;
+                    const uint32_t x = lhs_const ? inst.c : inst.b;
+                    if (k == 0) {
+                        write_int64_loadk(&inst, inst.a, 0);
+                        SetKnown(&known, inst.a, KnownValue::Int64(0));
+                        inst_changed = true;
+                    } else if (k == 1) {
+                        inst = MakeInstruction(OpCode::kMov, inst.a, x, 0);
+                        SetKnown(&known, inst.a, GetKnown(known, x));
+                        inst_changed = true;
+                    } else if (k == 2) {
+                        inst = MakeInstruction(OpCode::kAdd, inst.a, x, x);
+                        const auto x_known = KnownInt64(GetKnown(known, x));
+                        if (x_known.has_value()) {
+                            SetKnown(&known, inst.a, KnownValue::Int64(*x_known + *x_known));
+                        } else {
+                            SetKnown(&known, inst.a, KnownValue::Unknown());
+                        }
+                        inst_changed = true;
+                    } else {
+                        SetKnown(&known, inst.a, KnownValue::Unknown());
+                    }
+                } else {
+                    SetKnown(&known, inst.a, KnownValue::Unknown());
+                }
+                break;
+            }
+            case OpCode::kAdd:
+            case OpCode::kSub:
+            case OpCode::kDiv:
+            case OpCode::kBitAnd:
+            case OpCode::kBitOr:
+            case OpCode::kBitXor:
+            case OpCode::kBitShl:
+            case OpCode::kBitShr: {
+                const auto lhs = KnownInt64(GetKnown(known, inst.b));
+                const auto rhs = KnownInt64(GetKnown(known, inst.c));
+                if (lhs.has_value() && rhs.has_value()) {
+                    auto folded = FoldIntBinary(inst.opcode, *lhs, *rhs);
+                    if (folded.has_value()) {
+                        SetKnown(&known, inst.a, KnownValue::Int64(*folded));
+                    } else {
+                        SetKnown(&known, inst.a, KnownValue::Unknown());
+                    }
+                } else {
+                    SetKnown(&known, inst.a, KnownValue::Unknown());
+                }
+                break;
+            }
+            case OpCode::kAddImm:
+            case OpCode::kSubImm: {
+                const auto lhs = KnownInt64(GetKnown(known, inst.b));
+                if (lhs.has_value()) {
+                    const int64_t imm = static_cast<int32_t>(inst.c);
+                    const int64_t out =
+                        inst.opcode == OpCode::kAddImm ? (*lhs + imm) : (*lhs - imm);
+                    SetKnown(&known, inst.a, KnownValue::Int64(out));
+                } else {
+                    SetKnown(&known, inst.a, KnownValue::Unknown());
+                }
+                break;
+            }
+            case OpCode::kInc:
+            case OpCode::kDec: {
+                const auto value = KnownInt64(GetKnown(known, inst.a));
+                if (value.has_value()) {
+                    SetKnown(
+                        &known,
+                        inst.a,
+                        KnownValue::Int64(
+                            inst.opcode == OpCode::kInc ? *value + 1 : *value - 1));
+                } else {
+                    SetKnown(&known, inst.a, KnownValue::Unknown());
+                }
+                break;
+            }
+            case OpCode::kCmpEq: {
+                const auto lhs = KnownInt64(GetKnown(known, inst.b));
+                const auto rhs = KnownInt64(GetKnown(known, inst.c));
+                if (lhs.has_value() && rhs.has_value()) {
+                    SetKnown(&known, inst.a, KnownValue::Bool(*lhs == *rhs));
+                } else {
+                    SetKnown(&known, inst.a, KnownValue::Unknown());
+                }
+                break;
+            }
+            case OpCode::kCall:
+            case OpCode::kCallClosure:
+            case OpCode::kFfiCall:
+            case OpCode::kClosure:
+            case OpCode::kGetUpval:
+            case OpCode::kVarArg:
+            case OpCode::kStrLen:
+            case OpCode::kStrConcat:
+            case OpCode::kBitNot:
+            case OpCode::kNewObject:
+            case OpCode::kInvoke:
+                SetKnown(&known, inst.a, KnownValue::Unknown());
+                break;
+            case OpCode::kAddDecJnz:
+                SetKnown(&known, inst.a, KnownValue::Unknown());
+                SetKnown(&known, inst.b, KnownValue::Unknown());
+                break;
+            case OpCode::kSubImmJnz:
+            case OpCode::kAddImmJnz:
+            case OpCode::kDecJnz:
+                SetKnown(&known, inst.a, KnownValue::Unknown());
+                break;
+            default:
+                break;
+        }
+
+        if (inst_changed) {
+            result.changed = true;
+            ++result.rewritten;
+        }
+        if (IsRelativeJumpOpcode(inst.opcode) || IsTerminator(inst.opcode)) {
+            known.clear();
+        }
+    }
+
+    if (result.changed) {
+        RebuildFunctionCode(function, code);
+    }
+    return result;
+}
+
+PassRunResult RunSccpPass(
+    Function* function, Module* module,
+    std::unordered_map<int64_t, uint32_t>* int64_cache) {
+    PassRunResult result;
+    auto code = function->FlattenedInstructions();
+    if (code.empty()) {
+        return result;
+    }
+
+    const size_t reg_count = function->reg_count();
+    if (reg_count == 0) {
+        return result;
+    }
+    using RegState = std::vector<KnownValue>;
+    const RegState unknown_state(reg_count, KnownValue::Unknown());
+
+    std::vector<RegState> in_states(code.size(), unknown_state);
+    std::vector<bool> reachable(code.size(), false);
+    std::vector<size_t> worklist;
+    worklist.push_back(0);
+    reachable[0] = true;
+
+    auto merge_into = [&](size_t target, const RegState& incoming) {
+        if (target >= code.size()) {
+            return;
+        }
+        bool changed = false;
+        if (!reachable[target]) {
+            in_states[target] = incoming;
+            reachable[target] = true;
+            changed = true;
+        } else {
+            for (size_t r = 0; r < reg_count; ++r) {
+                const auto merged = MergeKnownValues(in_states[target][r], incoming[r]);
+                if (!KnownValueEquals(merged, in_states[target][r])) {
+                    in_states[target][r] = merged;
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            worklist.push_back(target);
+        }
+    };
+
+    auto set_unknown = [&](RegState* state, uint32_t reg) {
+        if (reg < reg_count) {
+            (*state)[reg] = KnownValue::Unknown();
+        }
+    };
+    auto set_unknown_range = [&](RegState* state, uint32_t begin, uint32_t count) {
+        for (uint32_t i = 0; i < count; ++i) {
+            set_unknown(state, begin + i);
+        }
+    };
+
+    while (!worklist.empty()) {
+        const size_t pc = worklist.back();
+        worklist.pop_back();
+        if (!reachable[pc]) {
+            continue;
+        }
+        const auto& inst = code[pc];
+        RegState out = in_states[pc];
+        std::optional<bool> branch_taken;
+
+        auto read_reg = [&](uint32_t reg) -> KnownValue {
+            if (reg >= reg_count) {
+                return KnownValue::Unknown();
+            }
+            return out[reg];
+        };
+
+        switch (inst.opcode) {
+            case OpCode::kLoadK:
+                if (inst.a < reg_count && inst.b < module->constants().size() &&
+                    module->constants()[inst.b].type == ConstantType::kInt64) {
+                    out[inst.a] = KnownValue::Int64(module->constants()[inst.b].int64_value);
+                } else {
+                    set_unknown(&out, inst.a);
+                }
+                break;
+            case OpCode::kMov:
+                if (inst.a < reg_count && inst.b < reg_count) {
+                    out[inst.a] = out[inst.b];
+                } else {
+                    set_unknown(&out, inst.a);
+                }
+                break;
+            case OpCode::kAdd:
+            case OpCode::kSub:
+            case OpCode::kMul:
+            case OpCode::kDiv:
+            case OpCode::kBitAnd:
+            case OpCode::kBitOr:
+            case OpCode::kBitXor:
+            case OpCode::kBitShl:
+            case OpCode::kBitShr: {
+                const auto lhs = KnownInt64(read_reg(inst.b));
+                const auto rhs = KnownInt64(read_reg(inst.c));
+                if (lhs.has_value() && rhs.has_value()) {
+                    auto folded = FoldIntBinary(inst.opcode, *lhs, *rhs);
+                    if (folded.has_value()) {
+                        out[inst.a] = KnownValue::Int64(*folded);
+                    } else {
+                        set_unknown(&out, inst.a);
+                    }
+                } else {
+                    set_unknown(&out, inst.a);
+                }
+                break;
+            }
+            case OpCode::kAddImm:
+            case OpCode::kSubImm: {
+                const auto lhs = KnownInt64(read_reg(inst.b));
+                if (lhs.has_value()) {
+                    const int64_t imm = static_cast<int32_t>(inst.c);
+                    out[inst.a] = KnownValue::Int64(
+                        inst.opcode == OpCode::kAddImm ? *lhs + imm : *lhs - imm);
+                } else {
+                    set_unknown(&out, inst.a);
+                }
+                break;
+            }
+            case OpCode::kInc:
+            case OpCode::kDec: {
+                const auto v = KnownInt64(read_reg(inst.a));
+                if (v.has_value()) {
+                    out[inst.a] = KnownValue::Int64(
+                        inst.opcode == OpCode::kInc ? *v + 1 : *v - 1);
+                } else {
+                    set_unknown(&out, inst.a);
+                }
+                break;
+            }
+            case OpCode::kCmpEq: {
+                const auto lhs = KnownInt64(read_reg(inst.b));
+                const auto rhs = KnownInt64(read_reg(inst.c));
+                if (lhs.has_value() && rhs.has_value()) {
+                    out[inst.a] = KnownValue::Bool(*lhs == *rhs);
+                } else {
+                    set_unknown(&out, inst.a);
+                }
+                break;
+            }
+            case OpCode::kJmpIf: {
+                const auto cond = read_reg(inst.a);
+                if (cond.kind != KnownValue::Kind::kUnknown) {
+                    branch_taken = KnownTruthy(cond);
+                }
+                break;
+            }
+            case OpCode::kJmpIfZero:
+            case OpCode::kJmpIfNotZero: {
+                const auto cond = KnownInt64(read_reg(inst.a));
+                if (cond.has_value()) {
+                    branch_taken =
+                        inst.opcode == OpCode::kJmpIfZero ? (*cond == 0) : (*cond != 0);
+                }
+                break;
+            }
+            case OpCode::kDecJnz: {
+                const auto counter = KnownInt64(read_reg(inst.a));
+                if (counter.has_value()) {
+                    const int64_t next = *counter - 1;
+                    out[inst.a] = KnownValue::Int64(next);
+                    branch_taken = next != 0;
+                } else {
+                    set_unknown(&out, inst.a);
+                }
+                break;
+            }
+            case OpCode::kAddDecJnz: {
+                const auto acc = KnownInt64(read_reg(inst.a));
+                const auto counter = KnownInt64(read_reg(inst.b));
+                if (acc.has_value() && counter.has_value()) {
+                    out[inst.a] = KnownValue::Int64(*acc + *counter);
+                    const int64_t next = *counter - 1;
+                    out[inst.b] = KnownValue::Int64(next);
+                    branch_taken = next != 0;
+                } else {
+                    set_unknown(&out, inst.a);
+                    set_unknown(&out, inst.b);
+                }
+                break;
+            }
+            case OpCode::kSubImmJnz:
+            case OpCode::kAddImmJnz: {
+                const auto counter = KnownInt64(read_reg(inst.a));
+                if (counter.has_value()) {
+                    const int64_t imm = static_cast<int32_t>(inst.b);
+                    const int64_t next = inst.opcode == OpCode::kSubImmJnz
+                                             ? *counter - imm
+                                             : *counter + imm;
+                    out[inst.a] = KnownValue::Int64(next);
+                    branch_taken = next != 0;
+                } else {
+                    set_unknown(&out, inst.a);
+                }
+                break;
+            }
+            case OpCode::kCall:
+            case OpCode::kCallClosure:
+            case OpCode::kFfiCall:
+            case OpCode::kClosure:
+            case OpCode::kGetUpval:
+            case OpCode::kStrLen:
+            case OpCode::kStrConcat:
+            case OpCode::kBitNot:
+            case OpCode::kNewObject:
+            case OpCode::kInvoke:
+                set_unknown(&out, inst.a);
+                break;
+            case OpCode::kVarArg:
+                set_unknown_range(&out, inst.a, inst.c);
+                break;
+            default:
+                break;
+        }
+
+        const auto push_fallthrough = [&]() {
+            if (pc + 1 < code.size()) {
+                merge_into(pc + 1, out);
+            }
+        };
+        const auto push_jump = [&](int32_t delta) {
+            const int64_t target = static_cast<int64_t>(pc) + static_cast<int64_t>(delta);
+            if (target < 0 || target >= static_cast<int64_t>(code.size())) {
+                return;
+            }
+            merge_into(static_cast<size_t>(target), out);
+        };
+
+        switch (inst.opcode) {
+            case OpCode::kJmp:
+                push_jump(static_cast<int32_t>(inst.a));
+                break;
+            case OpCode::kJmpIf:
+            case OpCode::kJmpIfZero:
+            case OpCode::kJmpIfNotZero:
+            case OpCode::kDecJnz:
+                if (branch_taken.has_value()) {
+                    if (*branch_taken) {
+                        push_jump(static_cast<int32_t>(inst.b));
+                    } else {
+                        push_fallthrough();
+                    }
+                } else {
+                    push_jump(static_cast<int32_t>(inst.b));
+                    push_fallthrough();
+                }
+                break;
+            case OpCode::kAddDecJnz:
+            case OpCode::kSubImmJnz:
+            case OpCode::kAddImmJnz:
+                if (branch_taken.has_value()) {
+                    if (*branch_taken) {
+                        push_jump(static_cast<int32_t>(inst.c));
+                    } else {
+                        push_fallthrough();
+                    }
+                } else {
+                    push_jump(static_cast<int32_t>(inst.c));
+                    push_fallthrough();
+                }
+                break;
+            default:
+                if (!IsTerminator(inst.opcode)) {
+                    push_fallthrough();
+                }
+                break;
+        }
+    }
+
+    auto write_int64_loadk = [&](Instruction* inst, uint32_t dst, int64_t value) {
+        const uint32_t const_idx = GetOrAddInt64Constant(module, int64_cache, value);
+        *inst = MakeInstruction(OpCode::kLoadK, dst, const_idx, 0);
+    };
+
+    for (size_t pc = 0; pc < code.size(); ++pc) {
+        auto& inst = code[pc];
+        if (!reachable[pc]) {
+            if (inst.opcode != OpCode::kNop) {
+                inst = MakeInstruction(OpCode::kNop);
+                result.changed = true;
+                ++result.rewritten;
+            }
+            continue;
+        }
+        const auto& in = in_states[pc];
+        bool inst_changed = false;
+
+        switch (inst.opcode) {
+            case OpCode::kMov: {
+                if (inst.b < reg_count) {
+                    const auto v = KnownInt64(in[inst.b]);
+                    if (v.has_value()) {
+                        write_int64_loadk(&inst, inst.a, *v);
+                        inst_changed = true;
+                    }
+                }
+                break;
+            }
+            case OpCode::kAdd:
+            case OpCode::kSub:
+            case OpCode::kMul:
+            case OpCode::kDiv:
+            case OpCode::kBitAnd:
+            case OpCode::kBitOr:
+            case OpCode::kBitXor:
+            case OpCode::kBitShl:
+            case OpCode::kBitShr: {
+                if (inst.b < reg_count && inst.c < reg_count) {
+                    const auto lhs = KnownInt64(in[inst.b]);
+                    const auto rhs = KnownInt64(in[inst.c]);
+                    if (lhs.has_value() && rhs.has_value()) {
+                        auto folded = FoldIntBinary(inst.opcode, *lhs, *rhs);
+                        if (folded.has_value()) {
+                            write_int64_loadk(&inst, inst.a, *folded);
+                            inst_changed = true;
+                        }
+                    }
+                }
+                break;
+            }
+            case OpCode::kAddImm:
+            case OpCode::kSubImm: {
+                if (inst.b < reg_count) {
+                    const auto src = KnownInt64(in[inst.b]);
+                    if (src.has_value()) {
+                        const int64_t imm = static_cast<int32_t>(inst.c);
+                        write_int64_loadk(
+                            &inst,
+                            inst.a,
+                            inst.opcode == OpCode::kAddImm ? *src + imm : *src - imm);
+                        inst_changed = true;
+                    }
+                }
+                break;
+            }
+            case OpCode::kInc:
+            case OpCode::kDec: {
+                if (inst.a < reg_count) {
+                    const auto src = KnownInt64(in[inst.a]);
+                    if (src.has_value()) {
+                        write_int64_loadk(
+                            &inst,
+                            inst.a,
+                            inst.opcode == OpCode::kInc ? *src + 1 : *src - 1);
+                        inst_changed = true;
+                    }
+                }
+                break;
+            }
+            case OpCode::kJmpIf: {
+                if (inst.a < reg_count && in[inst.a].kind != KnownValue::Kind::kUnknown) {
+                    if (KnownTruthy(in[inst.a])) {
+                        inst = MakeInstruction(OpCode::kJmp, inst.b, 0, 0);
+                    } else {
+                        inst = MakeInstruction(OpCode::kNop);
+                    }
+                    inst_changed = true;
+                }
+                break;
+            }
+            case OpCode::kJmpIfZero:
+            case OpCode::kJmpIfNotZero: {
+                if (inst.a < reg_count) {
+                    const auto cond = KnownInt64(in[inst.a]);
+                    if (cond.has_value()) {
+                        const bool jump =
+                            inst.opcode == OpCode::kJmpIfZero ? (*cond == 0) : (*cond != 0);
+                        if (jump) {
+                            inst = MakeInstruction(OpCode::kJmp, inst.b, 0, 0);
+                        } else {
+                            inst = MakeInstruction(OpCode::kNop);
+                        }
+                        inst_changed = true;
+                    }
+                }
+                break;
+            }
+            default:
+                break;
+        }
+
+        if (inst_changed) {
+            result.changed = true;
+            ++result.rewritten;
         }
     }
 
@@ -1306,6 +2068,7 @@ PassRunResult RunConstFoldPass(
     }
 
     if (allow_o3_const_exec) {
+        MergePassResult(&result, RunSccpPass(function, module, int64_cache));
         MergePassResult(&result, RunO3ConstExecPass(function, module, int64_cache));
     }
 
@@ -1612,9 +2375,31 @@ PassRunResult RunInlineSmallPass(Module* module, uint32_t inline_max_inst) {
             continue;
         }
 
+        uint32_t max_callee_regs = 0;
+        for (const auto& inst : old_code) {
+            if (inst.opcode != OpCode::kCall || inst.b >= module->functions().size() ||
+                !can_inline[inst.b]) {
+                continue;
+            }
+            const auto& callee = module->functions()[inst.b];
+            if (callee.param_count() != inst.c) {
+                continue;
+            }
+            max_callee_regs = std::max(max_callee_regs, static_cast<uint32_t>(callee.reg_count()));
+        }
+        if (max_callee_regs == 0) {
+            continue;
+        }
+
+        const uint32_t scratch_base = caller.reg_count();
+        const uint32_t required_regs = scratch_base + max_callee_regs;
+        if (required_regs > std::numeric_limits<uint16_t>::max()) {
+            continue;
+        }
+
         bool caller_changed = false;
         std::vector<Instruction> new_code;
-        new_code.reserve(old_code.size() + 8);
+        new_code.reserve(old_code.size() + 32);
         std::vector<size_t> old_to_new_start(old_code.size(), 0);
 
         for (size_t old_pc = 0; old_pc < old_code.size(); ++old_pc) {
@@ -1628,7 +2413,12 @@ PassRunResult RunInlineSmallPass(Module* module, uint32_t inline_max_inst) {
             }
 
             const auto& callee = module->functions()[inst.b];
-            if (callee.param_count() != inst.c || callee.param_count() == 0) {
+            if (callee.param_count() != inst.c) {
+                new_code.push_back(inst);
+                continue;
+            }
+            if (scratch_base + static_cast<uint32_t>(callee.reg_count()) >
+                std::numeric_limits<uint16_t>::max()) {
                 new_code.push_back(inst);
                 continue;
             }
@@ -1639,11 +2429,14 @@ PassRunResult RunInlineSmallPass(Module* module, uint32_t inline_max_inst) {
                 continue;
             }
 
-            new_code.push_back(MakeInstruction(OpCode::kMov, inst.a, inst.a + 1, 0));
             bool inline_ok = true;
+            for (uint32_t arg_i = 0; arg_i < inst.c; ++arg_i) {
+                new_code.push_back(
+                    MakeInstruction(OpCode::kMov, scratch_base + arg_i, inst.a + 1 + arg_i, 0));
+            }
             for (size_t i = 0; i + 1 < callee_code.size(); ++i) {
                 Instruction cloned = callee_code[i];
-                if (!RemapInlineInstructionRegs(&cloned, inst)) {
+                if (!RemapInlineInstructionRegs(&cloned, scratch_base)) {
                     inline_ok = false;
                     break;
                 }
@@ -1656,6 +2449,8 @@ PassRunResult RunInlineSmallPass(Module* module, uint32_t inline_max_inst) {
                 continue;
             }
 
+            const uint32_t mapped_ret = scratch_base + callee_code.back().a;
+            new_code.push_back(MakeInstruction(OpCode::kMov, inst.a, mapped_ret, 0));
             caller_changed = true;
             ++result.inlined;
         }
@@ -1695,6 +2490,9 @@ PassRunResult RunInlineSmallPass(Module* module, uint32_t inline_max_inst) {
         }
 
         RebuildFunctionCode(&caller, new_code);
+        if (required_regs > caller.reg_count()) {
+            caller.set_reg_count(static_cast<uint16_t>(required_regs));
+        }
         result.changed = true;
     }
 
@@ -1845,6 +2643,12 @@ StatusOr<BytecodeOptStats> OptimizeBytecodeModuleInPlace(
                     break;
                 case BytecodeOptPass::kLoopFusion:
                     pass_result = RunLoopFusionPass(&function);
+                    if (options.level == BytecodeOptLevel::kO3) {
+                        MergePassResult(&pass_result, RunLicmHeaderLoadPass(&function));
+                        MergePassResult(
+                            &pass_result,
+                            RunStrengthReductionPass(&function, module, &int64_cache));
+                    }
                     break;
                 case BytecodeOptPass::kConstFold:
                     pass_result = RunConstFoldPass(

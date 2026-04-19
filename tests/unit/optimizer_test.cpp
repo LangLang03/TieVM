@@ -239,6 +239,158 @@ TEST(OptimizerTest, O3BypassesFfiForwarderCalls) {
     EXPECT_EQ(CountOpcode(entry_fn, OpCode::kFfiCall), 2u);
 }
 
+TEST(OptimizerTest, O3SccpPropagatesAcrossBlocks) {
+    Module module("opt.sccp.cross_block");
+    const auto c5 = module.AddConstant(Constant::Int64(5));
+    const auto c7 = module.AddConstant(Constant::Int64(7));
+
+    auto& merge = module.AddFunction("merge", 4, 1);
+    auto& merge_bb = merge.AddBlock("entry");
+    InstructionBuilder(merge_bb)
+        .JmpIfZero(0, 3)
+        .LoadK(1, c5)
+        .Jmp(2)
+        .LoadK(1, c5)
+        .Add(0, 1, 1)
+        .Ret(0);
+
+    auto& entry = module.AddFunction("entry", 4, 0);
+    auto& entry_bb = entry.AddBlock("entry");
+    InstructionBuilder(entry_bb).LoadK(1, c7).Call(0, 0, 1).Ret(0);
+    module.set_entry_function(1);
+
+    BytecodeOptOptions o2_options;
+    o2_options.level = BytecodeOptLevel::kO2;
+    auto o2_or = OptimizeBytecodeModule(module, o2_options);
+    ASSERT_TRUE(o2_or.ok()) << o2_or.status().message();
+    EXPECT_TRUE(HasOpcode(o2_or.value().module.functions()[0], OpCode::kAdd));
+
+    BytecodeOptOptions o3_options;
+    o3_options.level = BytecodeOptLevel::kO3;
+    auto o3_or = OptimizeBytecodeModule(module, o3_options);
+    ASSERT_TRUE(o3_or.ok()) << o3_or.status().message();
+    EXPECT_FALSE(HasOpcode(o3_or.value().module.functions()[0], OpCode::kAdd));
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(o3_or.value().module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 10);
+}
+
+TEST(OptimizerTest, O3LicmRetargetsLoopBackedgeForInvariantHeaderLoad) {
+    Module module("opt.licm.header_load");
+    const auto c0 = module.AddConstant(Constant::Int64(0));
+    const auto c4 = module.AddConstant(Constant::Int64(4));
+    const auto c7 = module.AddConstant(Constant::Int64(7));
+
+    auto& loop_fn = module.AddFunction("loop", 6, 1);
+    auto& loop_bb = loop_fn.AddBlock("entry");
+    InstructionBuilder(loop_bb)
+        .LoadK(1, c0)
+        .Mov(2, 0)
+        .LoadK(3, c7)
+        .Add(1, 1, 3)
+        .DecJnz(2, -2)
+        .Ret(1);
+
+    auto& entry = module.AddFunction("entry", 4, 0);
+    auto& entry_bb = entry.AddBlock("entry");
+    InstructionBuilder(entry_bb).LoadK(1, c4).Call(0, 0, 1).Ret(0);
+    module.set_entry_function(1);
+
+    BytecodeOptOptions o3_options;
+    o3_options.level = BytecodeOptLevel::kO3;
+    auto o3_or = OptimizeBytecodeModule(module, o3_options);
+    ASSERT_TRUE(o3_or.ok()) << o3_or.status().message();
+
+    const auto code = o3_or.value().module.functions()[0].FlattenedInstructions();
+    bool found = false;
+    for (const auto& inst : code) {
+        if (inst.opcode == OpCode::kDecJnz) {
+            found = true;
+            EXPECT_EQ(static_cast<int32_t>(inst.b), -1);
+        }
+    }
+    EXPECT_TRUE(found);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(o3_or.value().module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 28);
+}
+
+TEST(OptimizerTest, O3StrengthReductionRewritesMulByTwo) {
+    Module module("opt.strength.mul2");
+    const auto c2 = module.AddConstant(Constant::Int64(2));
+    const auto c9 = module.AddConstant(Constant::Int64(9));
+
+    auto& mul2 = module.AddFunction("mul2", 4, 1);
+    auto& mul2_bb = mul2.AddBlock("entry");
+    InstructionBuilder(mul2_bb).LoadK(1, c2).Mul(0, 0, 1).Ret(0);
+
+    auto& entry = module.AddFunction("entry", 4, 0);
+    auto& entry_bb = entry.AddBlock("entry");
+    InstructionBuilder(entry_bb).LoadK(1, c9).Call(0, 0, 1).Ret(0);
+    module.set_entry_function(1);
+
+    BytecodeOptOptions o2_options;
+    o2_options.level = BytecodeOptLevel::kO2;
+    auto o2_or = OptimizeBytecodeModule(module, o2_options);
+    ASSERT_TRUE(o2_or.ok()) << o2_or.status().message();
+    EXPECT_TRUE(HasOpcode(o2_or.value().module.functions()[0], OpCode::kMul));
+
+    BytecodeOptOptions o3_options;
+    o3_options.level = BytecodeOptLevel::kO3;
+    auto o3_or = OptimizeBytecodeModule(module, o3_options);
+    ASSERT_TRUE(o3_or.ok()) << o3_or.status().message();
+    EXPECT_FALSE(HasOpcode(o3_or.value().module.functions()[0], OpCode::kMul));
+    EXPECT_TRUE(HasOpcode(o3_or.value().module.functions()[0], OpCode::kAdd));
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(o3_or.value().module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 18);
+}
+
+TEST(OptimizerTest, O3InlinePureFunctionWithLocalRegisters) {
+    Module module("opt.inline.locals");
+    const auto c3 = module.AddConstant(Constant::Int64(3));
+    const auto c4 = module.AddConstant(Constant::Int64(4));
+
+    auto& callee = module.AddFunction("mix", 3, 2);
+    auto& callee_bb = callee.AddBlock("entry");
+    InstructionBuilder(callee_bb).Add(2, 0, 1).Add(0, 2, 1).Ret(0);
+
+    auto& entry = module.AddFunction("entry", 4, 0);
+    auto& entry_bb = entry.AddBlock("entry");
+    InstructionBuilder(entry_bb)
+        .LoadK(1, c3)
+        .LoadK(2, c4)
+        .Call(0, 0, 2)
+        .AddImm(0, 0, 1)
+        .Ret(0);
+    module.set_entry_function(1);
+
+    BytecodeOptOptions o2_options;
+    o2_options.level = BytecodeOptLevel::kO2;
+    auto o2_or = OptimizeBytecodeModule(module, o2_options);
+    ASSERT_TRUE(o2_or.ok()) << o2_or.status().message();
+    EXPECT_TRUE(HasOpcode(o2_or.value().module.functions()[1], OpCode::kCall));
+
+    BytecodeOptOptions o3_options;
+    o3_options.level = BytecodeOptLevel::kO3;
+    o3_options.disable_passes = {BytecodeOptPass::kConstFold};
+    auto o3_or = OptimizeBytecodeModule(module, o3_options);
+    ASSERT_TRUE(o3_or.ok()) << o3_or.status().message();
+    EXPECT_FALSE(HasOpcode(o3_or.value().module.functions()[1], OpCode::kCall));
+    EXPECT_GT(o3_or.value().module.functions()[1].reg_count(), 4);
+
+    VmInstance vm;
+    auto result_or = vm.ExecuteModule(o3_or.value().module);
+    ASSERT_TRUE(result_or.ok()) << result_or.status().message();
+    EXPECT_EQ(result_or.value().AsInt64(), 12);
+}
+
 TEST(OptimizerTest, O3InlineSmallAllowsExportedCaller) {
     Module module("opt.inline.exported_caller");
     const auto c_40 = module.AddConstant(Constant::Int64(40));

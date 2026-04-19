@@ -163,6 +163,7 @@ class Function {
     }
     [[nodiscard]] std::vector<BytecodeValueType>& param_types() { return param_types_; }
     void set_upvalue_count(uint16_t upvalue_count) { upvalue_count_ = upvalue_count; }
+    void set_reg_count(uint16_t reg_count) { reg_count_ = reg_count; }
     void set_is_vararg(bool is_vararg) { is_vararg_ = is_vararg; }
     void set_is_exported(bool is_exported) { is_exported_ = is_exported; }
     void set_return_type(BytecodeValueType return_type) { return_type_ = return_type; }
